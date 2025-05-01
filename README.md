@@ -11,7 +11,7 @@ Support for multiple AWS profiles and regions
 Fast parameter lookup with local caching
 Easy integration with bash, zsh, and fish shells
 Lightweight with minimal dependencies
-Cross-platform support (Linux, Windows) - I am so lazy to open my ARM MacBook; someone who has a Mac (x86_64/ARM) and is interested in this should try to make a contribution. ^^, 
+Cross-platform support (Linux, Windows) - I am too lazy to open my ARM MacBook; if you have a Mac (x86_64/ARM) and are interested in this project, please consider contributing.  ^^, 
 
 # Installation
 Pre-built Binaries
