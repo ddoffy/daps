@@ -14,7 +14,12 @@ Lightweight with minimal dependencies
 Cross-platform support (Linux, Windows) - I am too lazy to open my ARM MacBook; if you have a Mac (x86_64/ARM) and are interested in this project, please consider contributing.  ^^, 
 
 # Installation
-Pre-built Binaries
+### Rustaceans
+
+> clone project and `cargo build --release` to build the project
+> or `cargo install --path .` to install the project
+
+### Pre-built Binaries
 Download the latest release for your platform:
 
 - [Linux (x86_64)](https://github.com/ddoffy/daps/releases)
