@@ -1,7 +1,12 @@
 [package]
 name = "daps"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
+description = "A command-line tool for managing AWS Systems Manager Parameter Store"
+license = "MIT"
+authors = ["D. Doffy <cuongnsm@gmail.com>"]
+homepage = "https://doffylaw.org"
+repository = "https://github.com/ddoffy/daps"
 
 [dependencies]
 rusoto_core = "0.47.0"
