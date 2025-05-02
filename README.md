@@ -36,7 +36,7 @@ sudo mv ./daps /usr/local/bin/daps
 ### Windows
 > TODO
 
-# Usages
+# Usage
 ## Basic Usage
 Once shell integration is set up, you can use tab completion with the AWS CLI or directly with the tool:
 bash# With AWS CLI
@@ -60,5 +60,5 @@ The tool uses your standard AWS configuration from ~/.aws/config and ~/.aws/cred
 # Contributing
 Contributions are welcome! Please see CONTRIBUTING.md for details.
 
-#License
+# License
 This project is licensed under the MIT License - see the LICENSE file for details.

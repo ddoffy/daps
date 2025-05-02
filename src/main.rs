@@ -17,8 +17,9 @@ use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
-    name = "aws-param-cli",
-    about = "AWS Parameter Store CLI with tab completion"
+    name = "daps",
+    about = "D. AWS Parameter Store CLI with tab completion",
+    author = "D. Doffy <cuongnsm@gmail.com>"
 )]
 struct Opt {
     /// AWS Region
@@ -33,11 +34,11 @@ struct Opt {
     #[structopt(short, long)]
     refresh: bool,
 
-    // Store directory for parameters and values
+    /// Store directory for parameters and values
     #[structopt(long, default_value = "parameters")]
     store_dir: String,
 
-    // Verbose output
+    /// Verbose output
     #[structopt(long)]
     verbose: bool,
 }
