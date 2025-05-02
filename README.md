@@ -17,8 +17,8 @@ Cross-platform support (Linux, Windows) - I am too lazy to open my ARM MacBook; 
 Pre-built Binaries
 Download the latest release for your platform:
 
-- [Linux (x86_64)](https://github.com/ddoffy/daps/releases/tag/v0.1.1)
-- [Windows (x86_64)](https://github.com/ddoffy/daps/releases/tag/v0.1.1) 
+- [Linux (x86_64)](https://github.com/ddoffy/daps/releases)
+- [Windows (x86_64)](https://github.com/ddoffy/daps/releases) 
 
 ### Linux/macOs
 Make the binary executable (Linux/macOS):
