@@ -14,6 +14,13 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
+use crate::encryption::{decrypt_value, encrypt_value};
+
+
+pub mod encryption;
+
+// Encrypt and decrypt keys constant
+const ENCRYPTION_KEY: &str = "my_secret_key"; // Replace with your actual key
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -132,8 +139,11 @@ impl ParameterCompleter {
 
         self.log(format!("Writing value to file: {}", file_path).as_str());
 
+        // encrypt the value before writing to the file
+        let encrypted_value = encrypt_value(&value);
+
         // new line to insert, append to the file
-        let new_line = format!("{}: {}\n", path, value);
+        let new_line = format!("{}: {}\n", path, encrypted_value);
 
         fs::OpenOptions::new()
             .append(true)
@@ -181,7 +191,14 @@ impl ParameterCompleter {
         let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
         // find the line index with the key in the file
 
-        replace_first_line_containing(&file_path, path, format!("{}: {}", path, value).as_str())?;
+        // encrypt the value before writing to the file
+        let encrypted_value = encrypt_value(&value);
+
+        replace_first_line_containing(
+            &file_path,
+            path,
+            format!("{}: {}", path, encrypted_value).as_str(),
+        )?;
 
         self.log(format!("Updated parameter: {}", path).as_str());
 
@@ -217,10 +234,13 @@ impl ParameterCompleter {
                 let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
                 // find the line index with the key in the file
 
+                // encrypt the value before writing to the file
+                let encrypted_value = encrypt_value(&value);
+
                 replace_first_line_containing(
                     &file_path,
                     path,
-                    format!("{}: {}", path, value).as_str(),
+                    format!("{}: {}", path, encrypted_value).as_str(),
                 )?;
 
                 self.log(format!("Updated parameter: {}", path).as_str());
@@ -436,7 +456,9 @@ impl ParameterCompleter {
                 if parts.len() == 2 {
                     let key = parts[0].trim().to_string();
                     let value = parts[1].trim().to_string();
-                    values_map.insert(key, value);
+                    // decrypt the value before storing it
+                    let decrypted_value = decrypt_value(&value);
+                    values_map.insert(key, decrypted_value);
                 }
             }
         }
@@ -459,7 +481,9 @@ impl ParameterCompleter {
 
         // Write the values
         for (key, value) in values.iter() {
-            writeln!(file, "{}: {}", key, value)?;
+            // encrypt the value before writing to the file
+            let encrypted_value = encrypt_value(value);
+            writeln!(file, "{}: {}", key, encrypted_value)?;
         }
 
         self.log("Values written to file");
@@ -549,23 +573,6 @@ impl ParameterCompleter {
         } else {
             path.to_string()
         };
-
-        // // Look up completions in our map
-        // if let Some(children) = parameters.get(&lookup_path) {
-        //     children
-        //         .iter()
-        //         .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
-        //         .map(|child| {
-        //             if lookup_path == "/" {
-        //                 format!("/{}", child)
-        //             } else {
-        //                 format!("{}/{}", lookup_path, child)
-        //             }
-        //         })
-        //         .collect()
-        // } else {
-        //     Vec::new()
-        // }
 
         // Look up completions in our map
         parameters
@@ -956,3 +963,4 @@ fn replace_first_line_containing(
         replacement_line,
     )
 }
+
