@@ -493,24 +493,23 @@ impl ParameterCompleter {
         full_path: &str,
         paths_map: &mut HashMap<String, Vec<String>>,
     ) {
+        // Ensure the root path exists in the map
+        paths_map.entry("/".to_string()).or_insert_with(Vec::new);
+
         // Split the path into components
-        let path_parts: Vec<&str> = full_path.split('/').collect();
-        let mut current_path = String::new();
+        let path_parts: Vec<&str> = full_path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        let mut current_path = "/".to_string();
 
         // Process each part of the path
-        for (i, part) in path_parts.iter().enumerate() {
-            if part.is_empty() {
-                if i == 0 {
-                    current_path.push('/');
-                }
-                continue;
-            }
-
-            let parent_path = if current_path.is_empty() || current_path == "/" {
-                "/".to_string()
-            } else {
-                current_path.clone()
-            };
+        for part in path_parts {
+            // Add this part to its parent's children
+            paths_map
+                .entry(current_path.clone())
+                .or_insert_with(Vec::new)
+                .push(part.to_string());
 
             // Update current path
             if current_path.ends_with('/') {
@@ -519,12 +518,6 @@ impl ParameterCompleter {
                 current_path.push('/');
                 current_path.push_str(part);
             }
-
-            // Add this part to its parent's children
-            paths_map
-                .entry(parent_path)
-                .or_insert_with(Vec::new)
-                .push(part.to_string());
 
             // Ensure the current path exists in the map
             paths_map
@@ -557,22 +550,40 @@ impl ParameterCompleter {
             path.to_string()
         };
 
+        // // Look up completions in our map
+        // if let Some(children) = parameters.get(&lookup_path) {
+        //     children
+        //         .iter()
+        //         .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
+        //         .map(|child| {
+        //             if lookup_path == "/" {
+        //                 format!("/{}", child)
+        //             } else {
+        //                 format!("{}/{}", lookup_path, child)
+        //             }
+        //         })
+        //         .collect()
+        // } else {
+        //     Vec::new()
+        // }
+
         // Look up completions in our map
-        if let Some(children) = parameters.get(&lookup_path) {
-            children
-                .iter()
-                .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
-                .map(|child| {
-                    if lookup_path == "/" {
-                        format!("/{}", child)
-                    } else {
-                        format!("{}/{}", lookup_path, child)
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
+        parameters
+            .get(&lookup_path)
+            .map(|children| {
+                children
+                    .iter()
+                    .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
+                    .map(|child| {
+                        if lookup_path == "/" {
+                            format!("/{}", child)
+                        } else {
+                            format!("{}/{}", lookup_path, child)
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_else(Vec::new)
     }
 
     fn log(&self, message: &str) {
@@ -600,10 +611,9 @@ impl Completer for ParamStoreHelper {
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
         // For simplicity, we'll assume the entire line is a parameter path
         let path = line[..pos].trim();
+        let start = 0; // Start completing from the beginning of the line
 
         let completions = self.completer.get_completions(path);
-
-        let start = 0; // Start completing from the beginning of the line
 
         let mut candidates: Vec<Pair> = completions
             .into_iter()
