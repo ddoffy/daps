@@ -1,3 +1,4 @@
+use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
 use rustyline::Helper;
@@ -7,7 +8,7 @@ use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
 use rustyline::hint::{Hint, Hinter};
 use rustyline::validate::Validator;
 use rustyline::{CompletionType, Config, Context, EditMode, Editor};
-use std::borrow::Cow::{self, Borrowed};
+use std::borrow::Cow::{self, Borrowed, Owned};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
@@ -35,6 +36,10 @@ struct Opt {
     // Store directory for parameters and values
     #[structopt(long, default_value = "parameters")]
     store_dir: String,
+
+    // Verbose output
+    #[structopt(long)]
+    verbose: bool,
 }
 
 // Helper structure for rustyline that provides parameter completion
@@ -45,10 +50,17 @@ struct ParameterCompleter {
     base_path: String,
     refresh: bool,
     store_dir: String,
+    verbose: bool,
 }
 
 impl ParameterCompleter {
-    fn new(region: Region, base_path: String, refresh: bool, store_dir: String) -> Self {
+    fn new(
+        region: Region,
+        base_path: String,
+        refresh: bool,
+        store_dir: String,
+        verbose: bool,
+    ) -> Self {
         let client = SsmClient::new(region);
         let parameters = Arc::new(Mutex::new(HashMap::new()));
         let values = Arc::new(Mutex::new(HashMap::new()));
@@ -64,6 +76,7 @@ impl ParameterCompleter {
             values,
             refresh,
             store_dir,
+            verbose,
         }
     }
 
@@ -103,6 +116,9 @@ impl ParameterCompleter {
         let mut parameters = self.parameters.lock().unwrap();
         let mut values = self.values.lock().unwrap();
 
+        self.log(format!("Updating parameter: {}", path).as_str());
+        self.log(format!("New value: {}", value).as_str());
+
         // add the parameter to the parameters map
         self.process_parameter_path(path, &mut parameters);
 
@@ -112,6 +128,8 @@ impl ParameterCompleter {
         // Write the updated value to the file
         let base_path = self.base_path.clone().replace('/', "_");
         let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
+
+        self.log(format!("Writing value to file: {}", file_path).as_str());
 
         // new line to insert, append to the file
         let new_line = format!("{}: {}\n", path, value);
@@ -124,6 +142,8 @@ impl ParameterCompleter {
 
         // Write the parameters to the file
         self.write_parameters_to_file(base_path.as_str(), parameters.clone())?;
+
+        self.log("Updated all parameters and values");
 
         Ok(())
     }
@@ -140,11 +160,16 @@ impl ParameterCompleter {
             ..Default::default()
         };
 
+        // Fetch the parameter from AWS
+        self.log(format!("Fetching parameter: {}", path).as_str());
+
         let result = self.client.get_parameter(request).await?;
 
         if let Some(param) = result.parameter {
             self.set_parameter(path, value.clone(), param.type_).await?;
         }
+
+        self.log(format!("Setting parameter: {}", path).as_str());
 
         // Update the values map with the new value
         let mut values = self.values.lock().unwrap();
@@ -157,6 +182,8 @@ impl ParameterCompleter {
 
         replace_first_line_containing(&file_path, path, format!("{}: {}", path, value).as_str())?;
 
+        self.log(format!("Updated parameter: {}", path).as_str());
+
         Ok(value)
     }
 
@@ -164,7 +191,7 @@ impl ParameterCompleter {
         &self,
         path: &str,
     ) -> Result<String, RusotoError<rusoto_ssm::GetParameterError>> {
-        println!("Fetching parameter: {}", path);
+        self.log(format!("Fetching parameter: {}", path).as_str());
         // get value from AWS parameter store
         let request = GetParameterRequest {
             name: path.to_string(),
@@ -172,6 +199,8 @@ impl ParameterCompleter {
             ..Default::default()
         };
 
+        // Fetch the parameter from AWS
+        self.log(format!("Fetching parameter: {}", path).as_str());
         let result = self.client.get_parameter(request).await?;
 
         if let Some(param) = result.parameter {
@@ -193,11 +222,25 @@ impl ParameterCompleter {
                     format!("{}: {}", path, value).as_str(),
                 )?;
 
+                self.log(format!("Updated parameter: {}", path).as_str());
+
                 return Ok(value);
             }
         }
 
+        self.log(format!("Parameter not found: {}", path).as_str());
+
         Ok("".to_string())
+    }
+
+    fn add_commands(&self, paths_map: &mut HashMap<String, Vec<String>>) {
+        // Add commands to the parameters map
+        paths_map.insert("set".to_string(), Vec::new());
+        paths_map.insert("insert".to_string(), Vec::new());
+        paths_map.insert("search".to_string(), Vec::new());
+        paths_map.insert("refresh".to_string(), Vec::new());
+        paths_map.insert("reload".to_string(), Vec::new());
+        paths_map.insert("exit".to_string(), Vec::new());
     }
 
     async fn load_parameters(
@@ -215,6 +258,7 @@ impl ParameterCompleter {
 
         // Initialize with the base path
         paths_map.insert(self.base_path.clone(), Vec::new());
+        self.add_commands(&mut paths_map);
 
         // Fetch all parameters recursively
         let mut next_token: Option<String> = None;
@@ -225,31 +269,34 @@ impl ParameterCompleter {
         // ignore if the refresh flag is set
         if !self.refresh {
             // Check if the parameters and values file exists
-            println!("Checking for existing parameters and values files...");
+            self.log("Checking for existing parameters and values files...");
             let base_path = self.base_path.clone().replace('/', "_");
 
             // if parameters file exists, load them
             if let Err(e) = self.load_parameters_from_file(base_path.as_str(), &mut paths_map) {
-                println!("Error loading parameters from file: {}", e);
+                self.log(format!("Error loading parameters from file: {}", e).as_str());
             } else {
                 is_parameters_loaded = true;
             }
 
             // if values file exists, load them
             if let Err(e) = self.load_values_from_file(base_path.as_str(), &mut values_d) {
-                println!("Error loading values from file: {}", e);
+                self.log(format!("Error loading values from file: {}", e).as_str());
             } else {
                 is_values_loaded = true;
             }
 
             if is_parameters_loaded && is_values_loaded {
                 // if both exist, return
-                println!("Parameters and values loaded from file");
+                self.log("Parameters and values loaded from file");
 
-                println!(
-                    "Loaded {} parameter paths and {} values",
-                    paths_map.len(),
-                    values_d.len(),
+                self.log(
+                    format!(
+                        "Loaded {} parameter paths and {} values",
+                        paths_map.len(),
+                        values_d.len(),
+                    )
+                    .as_str(),
                 );
 
                 // Update the shared parameters and values map
@@ -261,10 +308,16 @@ impl ParameterCompleter {
         }
 
         // if both does not exist, fetch from AWS
-        println!(
-            "Loading parameters from AWS Parameter Store from path {} ...",
-            self.base_path
+        self.log(
+            format!(
+                "Loading parameters from AWS Parameter Store from path {} ...",
+                self.base_path
+            )
+            .as_str(),
         );
+
+        let mut total = 0;
+
         loop {
             let request = GetParametersByPathRequest {
                 path: self.base_path.clone(),
@@ -276,6 +329,17 @@ impl ParameterCompleter {
             };
 
             let result = self.client.get_parameters_by_path(request).await?;
+
+            // Check if we have reached the end of the results
+            if result.parameters.is_none() {
+                break;
+            }
+
+            let len = result.parameters.as_ref().unwrap().len();
+            self.log(format!("Fetched {} parameters", len).as_str());
+
+            total += len;
+            self.log(format!("Total parameters fetched: {}", total).as_str());
 
             if let Some(params) = &result.parameters {
                 for param in params {
@@ -310,12 +374,14 @@ impl ParameterCompleter {
         // This is a placeholder for file writing logic
         // You can use serde_json or any other method to serialize the data
         // serialize the parameters and values to a file
-        println!("Writing parameters and values to file...");
+        self.log("Writing parameters and values to file...");
+        // write both parameters and values to a file at the same time
+
         self.write_parameters_to_file(base_path.as_str(), paths_map)?;
         // write the values to a file
         self.write_values_to_file(base_path.as_str(), values_d)?;
 
-        println!("Loaded {} parameter paths", parameters.len());
+        self.log(format!("Loaded {} parameter paths", parameters.len()).as_str());
         Ok(())
     }
 
@@ -327,13 +393,13 @@ impl ParameterCompleter {
         // Load parameters from a file
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/parameters_{}.txt", store_dir, base_path);
+        self.log(format!("Loading parameters from file: {}", file_path).as_str());
         let file = File::open(file_path)?;
         let reader = io::BufReader::new(file);
 
         // Initialize with the base path
         paths_map.insert(self.base_path.clone(), Vec::new());
 
-        println!("Loading parameters from file...");
         for line in reader.lines() {
             let line = line?;
             if line.contains(':') {
@@ -345,7 +411,7 @@ impl ParameterCompleter {
             }
         }
 
-        println!("Parameters loaded from file");
+        self.log("Parameters loaded from file");
 
         Ok(())
     }
@@ -358,10 +424,10 @@ impl ParameterCompleter {
         // Load values from a file
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/values_{}.txt", store_dir, base_path);
+        self.log(format!("Loading values from file: {}", file_path).as_str());
         let file = File::open(file_path)?;
         let reader = io::BufReader::new(file);
 
-        println!("Loading values from file...");
         for line in reader.lines() {
             let line = line?;
             if line.contains(':') {
@@ -381,10 +447,12 @@ impl ParameterCompleter {
         base_path: &str,
         values: HashMap<String, String>,
     ) -> io::Result<()> {
-        println!("Writing values to file...");
-        println!("Len of values: {}", values.len());
+        self.log("Writing values to file...");
+        self.log(format!("Len of values: {}", values.len()).as_str());
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/values_{}.txt", store_dir, base_path);
+
+        self.log(format!("File path: {}", file_path).as_str());
         // Open a file to write the parameters and values
         let mut file = File::create(file_path)?;
 
@@ -393,7 +461,7 @@ impl ParameterCompleter {
             writeln!(file, "{}: {}", key, value)?;
         }
 
-        println!("Values written to file");
+        self.log("Values written to file");
 
         Ok(())
     }
@@ -403,8 +471,8 @@ impl ParameterCompleter {
         base_path: &str,
         parameters: HashMap<String, Vec<String>>,
     ) -> io::Result<()> {
-        println!("Writing parameters to file...");
-        println!("Len of parameters: {}", parameters.len());
+        self.log("Writing parameters to file...");
+        self.log(format!("Len of parameters: {}", parameters.len()).as_str());
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/parameters_{}.txt", store_dir, base_path);
         // Open a file to write the parameters and values
@@ -414,7 +482,7 @@ impl ParameterCompleter {
             writeln!(file, "{}: {:?}", path, children)?;
         }
 
-        println!("Parameters written to file");
+        self.log("Parameters written to file");
 
         Ok(())
     }
@@ -492,7 +560,7 @@ impl ParameterCompleter {
         if let Some(children) = parameters.get(&lookup_path) {
             children
                 .iter()
-                .filter(|child| child.starts_with(&prefix))
+                .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
                 .map(|child| {
                     if lookup_path == "/" {
                         format!("/{}", child)
@@ -505,12 +573,19 @@ impl ParameterCompleter {
             Vec::new()
         }
     }
+
+    fn log(&self, message: &str) {
+        if self.verbose {
+            println!("{}", message);
+        }
+    }
 }
 
 // Helper implementation for rustyline
 struct ParamStoreHelper {
     completer: ParameterCompleter,
     highlighter: MatchingBracketHighlighter,
+    commands: Vec<String>,
 }
 
 impl Completer for ParamStoreHelper {
@@ -529,7 +604,7 @@ impl Completer for ParamStoreHelper {
 
         let start = 0; // Start completing from the beginning of the line
 
-        let candidates: Vec<Pair> = completions
+        let mut candidates: Vec<Pair> = completions
             .into_iter()
             .map(|s| Pair {
                 display: s.clone(),
@@ -537,7 +612,42 @@ impl Completer for ParamStoreHelper {
             })
             .collect();
 
+        let cmd_candidates: Vec<Pair> = self
+            .commands
+            .iter()
+            .filter(|cmd| cmd.to_lowercase().starts_with(&path.to_lowercase()))
+            .map(|s| Pair {
+                display: s.clone(),
+                replacement: s.clone(),
+            })
+            .collect();
+
+        candidates.extend(cmd_candidates);
+
         Ok((start, candidates))
+    }
+}
+
+impl Highlighter for ParamStoreHelper {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        use colored::*; // Bring the trait into scope
+
+        let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        let command = parts.get(0).unwrap_or(&"");
+        let args = parts.get(1).unwrap_or(&"");
+
+        if self.commands.contains(&command.to_lowercase()) {
+            // Highlight command in blue and arguments in default color
+            Owned(format!("{}{}", command.blue(), args))
+        } else {
+            // Default: no highlighting
+            Borrowed(line)
+        }
+    }
+
+    fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
+        // Enable highlighting per character if needed, e.g., for matching brackets
+        self.highlighter.highlight_char(_line, _pos)
     }
 }
 
@@ -562,16 +672,6 @@ impl Hinter for ParamStoreHelper {
     }
 }
 
-impl Highlighter for ParamStoreHelper {
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        Borrowed(line)
-    }
-
-    fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
-        false
-    }
-}
-
 impl Validator for ParamStoreHelper {}
 
 impl Helper for ParamStoreHelper {}
@@ -590,7 +690,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create the parameter completer
-    let completer = ParameterCompleter::new(region, base_path, opt.refresh, opt.store_dir);
+    let completer =
+        ParameterCompleter::new(region, base_path, opt.refresh, opt.store_dir, opt.verbose);
 
     // Load parameters initially
     completer.load_parameters().await?;
@@ -599,6 +700,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let helper = ParamStoreHelper {
         completer,
         highlighter: MatchingBracketHighlighter::new(),
+        commands: vec![
+            "exit".to_string(),
+            "refresh".to_string(),
+            "reload".to_string(),
+            "set".to_string(),
+            "insert".to_string(),
+            "search".to_string(),
+        ],
     };
 
     let config = Config::builder()
@@ -610,8 +719,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rl.set_helper(Some(helper));
 
     println!("AWS Parameter Store CLI");
-    println!("Type a parameter path and use TAB for completion");
-    println!("Type 'exit' to quit");
+    println!(
+        "Type a parameter path and use {} for completion",
+        "Tab".red()
+    );
+    println!("Type '{}' to quit", "exit".yellow());
 
     let mut selected = String::new();
     loop {
@@ -640,6 +752,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         insert_value(helper, &line).await?;
                     }
                     continue;
+                } else if line.trim().starts_with("search") {
+                    if let Some(helper) = rl.helper_mut() {
+                        let search_term = line.replace("search ", "");
+                        let parameters = helper.completer.values.lock().unwrap();
+                        for (key, value) in parameters.iter() {
+                            if key.to_lowercase().contains(&search_term.to_lowercase()) {
+                                println!("{} -> {:?}", key, value);
+                            }
+                        }
+                    }
+                    continue;
                 }
 
                 rl.add_history_entry(line.as_str());
@@ -654,8 +777,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap()
                     .get(&line)
                     .map(|v| {
-                        println!("You selected: {}", selected);
-                        println!("Value: {}", v);
+                        // print with colored output to highlight the parameter
+                        println!("You selected: {}", selected.green());
+                        println!("Value: {}", v.red());
                     });
             }
             Err(ReadlineError::Interrupted) => {
