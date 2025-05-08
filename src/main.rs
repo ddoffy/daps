@@ -1,3 +1,4 @@
+use crate::encryption::{decrypt_value, encrypt_value};
 use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
@@ -14,8 +15,6 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
-use crate::encryption::{decrypt_value, encrypt_value};
-
 
 pub mod encryption;
 
@@ -757,7 +756,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 } else if line.trim() == "reload" {
                     if let Some(helper) = rl.helper_mut() {
-                        reload(helper, &selected).await;
+                        reload(helper, &selected).await?;
                     }
                     continue;
                 } else if line.trim().starts_with("set") {
@@ -774,12 +773,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(helper) = rl.helper_mut() {
                         let search_term = line.replace("search ", "");
                         let parameters = helper.completer.values.lock().unwrap();
-                        for (key, value) in parameters.iter() {
-                            if key.to_lowercase().contains(&search_term.to_lowercase()) {
-                                println!("{} -> {:?}", key, value);
-                            }
+                        let key = parameters
+                            .keys()
+                            .find(|k| k.to_lowercase().contains(&search_term.to_lowercase()));
+
+                        if let Some(key) = key {
+                            let value = parameters.get(key).unwrap();
+                            println!("{} -> {}", key, value);
                         }
                     }
+                    continue;
+                } else {
                     continue;
                 }
 
@@ -868,11 +872,16 @@ async fn set_value(
     Ok(())
 }
 
-async fn reload(helper: &mut ParamStoreHelper, path: &str) {
+async fn reload(
+    helper: &mut ParamStoreHelper,
+    path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Reloading parameter: {}", path);
     // fetch the selected parameter from AWS
-    let value = helper.completer.get_set_value(path).await.unwrap();
+    let value = helper.completer.get_set_value(path).await?;
     println!("Reloaded value: {}", value);
+
+    Ok(())
 }
 
 fn parse_region(region: &str) -> Result<Region, String> {
@@ -963,4 +972,3 @@ fn replace_first_line_containing(
         replacement_line,
     )
 }
-
