@@ -1,4 +1,6 @@
 use crate::encryption::{decrypt_value, encrypt_value};
+use cli_clipboard::linux_clipboard::LinuxClipboardContext;
+use cli_clipboard::{ClipboardContext, ClipboardProvider};
 use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
@@ -742,6 +744,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("Type '{}' to quit", "exit".yellow());
 
+    // Create clipboard context
+    let mut clip = ClipboardContext::new().unwrap();
+    let mut cpboard = Cpboard::new(&mut clip);
+
     let mut selected = String::new();
     loop {
         let readline = rl.readline(">> ");
@@ -751,22 +757,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 } else if line.trim() == "refresh" {
                     if let Some(helper) = rl.helper_mut() {
-                        helper.completer.load_parameters().await?;
+                        if let Err(err) = helper.completer.load_parameters().await {
+                            println!("Error refreshing parameters: {}", err);
+                        } else {
+                            println!("Parameters refreshed");
+                        }
                     }
                     continue;
                 } else if line.trim() == "reload" {
                     if let Some(helper) = rl.helper_mut() {
-                        reload(helper, &selected).await?;
+                        match reload(helper, &selected).await {
+                            Ok(value) => {
+                                println!("Reloaded value: {}", value);
+                                // Copy to clipboard
+                                if let Err(err) = cpboard.set_clipboard_content(&value) {
+                                    println!("Error copying to clipboard: {}", err);
+                                } else {
+                                    println!("Copied to clipboard: {}", value);
+                                }
+                            }
+                            Err(err) => {
+                                println!("Error reloading parameter: {}", err);
+                            }
+                        }
                     }
                     continue;
                 } else if line.trim().starts_with("set") {
                     if let Some(helper) = rl.helper_mut() {
-                        set_value(helper, &line, &selected).await?;
+                        match set_value(helper, &line, &selected).await {
+                            Ok(value) => {
+                                println!("Set value: {}", value);
+                                // Copy to clipboard
+                                if let Err(err) = cpboard.set_clipboard_content(&value) {
+                                    println!("Error copying to clipboard: {}", err);
+                                } else {
+                                    println!("Copied to clipboard: {}", value);
+                                }
+                            }
+                            Err(err) => {
+                                println!("Error setting parameter: {}", err);
+                            }
+                        }
                     }
                     continue;
                 } else if line.trim().starts_with("insert") {
                     if let Some(helper) = rl.helper_mut() {
-                        insert_value(helper, &line).await?;
+                        match insert_value(helper, &line).await {
+                            Ok(value) => {
+                                println!("Inserted value: {}", value);
+                                // Copy to clipboard
+                                if let Err(err) = cpboard.set_clipboard_content(&value) {
+                                    println!("Error copying to clipboard: {}", err);
+                                } else {
+                                    println!("Copied to clipboard: {}", value);
+                                }
+                            }
+                            Err(err) => {
+                                println!("Error inserting parameter: {}", err);
+                            }
+                        }
                     }
                     continue;
                 } else if line.trim().starts_with("search") {
@@ -782,8 +831,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("{} -> {}", key, value);
                         }
                     }
-                    continue;
-                } else {
                     continue;
                 }
 
@@ -802,6 +849,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // print with colored output to highlight the parameter
                         println!("You selected: {}", selected.green());
                         println!("Value: {}", v.red());
+                        // Copy to clipboard
+                        if let Err(err) = cpboard.set_clipboard_content(v) {
+                            println!("Error copying to clipboard: {}", err);
+                        } else {
+                            println!("Copied to clipboard: {}", v);
+                        }
                     });
             }
             Err(ReadlineError::Interrupted) => {
@@ -825,7 +878,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn insert_value(
     helper: &mut ParamStoreHelper,
     line: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     println!("Inserting parameter: {}", line);
     let path_and_value = line.replace("insert ", "").trim_start().to_string();
 
@@ -854,14 +907,14 @@ async fn insert_value(
     // fetch the selected parameter from AWS
     println!("Inserted value: {}", value);
 
-    Ok(())
+    Ok(value.to_string())
 }
 
 async fn set_value(
     helper: &mut ParamStoreHelper,
     line: &str,
     path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     println!("Setting parameter: {}", path);
     let value = line.replace("set ", "");
 
@@ -869,19 +922,19 @@ async fn set_value(
     let value = helper.completer.change_value(path, value).await?;
     println!("Set value: {}", value);
 
-    Ok(())
+    Ok(value)
 }
 
 async fn reload(
     helper: &mut ParamStoreHelper,
     path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     println!("Reloading parameter: {}", path);
     // fetch the selected parameter from AWS
     let value = helper.completer.get_set_value(path).await?;
     println!("Reloaded value: {}", value);
 
-    Ok(())
+    Ok(value)
 }
 
 fn parse_region(region: &str) -> Result<Region, String> {
@@ -971,4 +1024,24 @@ fn replace_first_line_containing(
         |line| line.contains(search_text),
         replacement_line,
     )
+}
+
+struct Cpboard<'a> {
+    ctx: &'a mut LinuxClipboardContext,
+}
+
+impl<'a> Cpboard<'a> {
+    fn new(ctx: &'a mut LinuxClipboardContext) -> Cpboard<'a> {
+        Cpboard { ctx }
+    }
+
+    fn set_clipboard_content(&mut self, content: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.ctx.set_contents(content.to_owned())?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn get_clipboard_content(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(self.ctx.get_contents()?)
+    }
 }
