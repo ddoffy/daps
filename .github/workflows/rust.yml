@@ -18,3 +18,14 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose --release
+    - name: Copy artifacts
+      run: |
+        mkdir -p $GITHUB_WORKSPACE/artifacts
+        cp target/release/daps $GITHUB_WORKSPACE/artifacts/daps
+        output=$(ls -l $GITHUB_WORKSPACE/artifacts)
+        echo "Artifacts: $output"
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: daps
+
