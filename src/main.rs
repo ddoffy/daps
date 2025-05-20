@@ -1,6 +1,5 @@
 use crate::encryption::{decrypt_value, encrypt_value};
-use cli_clipboard::linux_clipboard::LinuxClipboardContext;
-use cli_clipboard::{ClipboardContext, ClipboardProvider};
+use clipboard::{ClipboardContext, ClipboardProvider};
 use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
@@ -618,7 +617,6 @@ impl Completer for ParamStoreHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
-
         // For simplicity, we'll assume the entire line is a parameter path
         let path = line[..pos].trim();
         let start = 0; // Start completing from the beginning of the line
@@ -749,8 +747,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Type '{}' to quit", "exit".yellow());
 
     // Create clipboard context
-    let mut clip = ClipboardContext::new().unwrap();
-    let mut cpboard = Cpboard::new(&mut clip);
+    let mut ctx = ClipboardProvider::new().unwrap();
+    let mut cpboard = Cpboard::new(&mut ctx);
 
     let mut selected = String::new();
     loop {
@@ -1031,11 +1029,11 @@ fn replace_first_line_containing(
 }
 
 struct Cpboard<'a> {
-    ctx: &'a mut LinuxClipboardContext,
+    ctx: &'a mut ClipboardContext,
 }
 
 impl<'a> Cpboard<'a> {
-    fn new(ctx: &'a mut LinuxClipboardContext) -> Cpboard<'a> {
+    fn new(ctx: &'a mut ClipboardContext) -> Cpboard<'a> {
         Cpboard { ctx }
     }
 
