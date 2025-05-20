@@ -60,6 +60,7 @@ struct ParameterCompleter {
     refresh: bool,
     store_dir: String,
     verbose: bool,
+    metadata: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl ParameterCompleter {
@@ -73,6 +74,7 @@ impl ParameterCompleter {
         let client = SsmClient::new(region);
         let parameters = Arc::new(Mutex::new(HashMap::new()));
         let values = Arc::new(Mutex::new(HashMap::new()));
+        let metadata = Arc::new(Mutex::new(HashMap::new()));
         // Create the directory if it doesn't exist
         std::fs::create_dir_all(&store_dir).unwrap_or_else(|_| {
             println!("Failed to create directory: {}", store_dir);
@@ -86,6 +88,7 @@ impl ParameterCompleter {
             refresh,
             store_dir,
             verbose,
+            metadata,
         }
     }
 
@@ -519,7 +522,7 @@ impl ParameterCompleter {
         paths_map: &mut HashMap<String, Vec<String>>,
     ) {
         // Ensure the root path exists in the map
-        paths_map.entry("/".to_string()).or_insert_with(Vec::new);
+        paths_map.entry("/".to_string()).or_default();
 
         // Split the path into components
         let path_parts: Vec<&str> = full_path
@@ -533,7 +536,7 @@ impl ParameterCompleter {
             // Add this part to its parent's children
             paths_map
                 .entry(current_path.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(part.to_string());
 
             // Update current path
@@ -545,14 +548,45 @@ impl ParameterCompleter {
             }
 
             // Ensure the current path exists in the map
-            paths_map
-                .entry(current_path.clone())
-                .or_insert_with(Vec::new);
+            paths_map.entry(current_path.clone()).or_default();
         }
     }
 
     fn get_completions(&self, path: &str) -> Vec<String> {
         let parameters = self.parameters.lock().unwrap();
+        let metadata = self.metadata.lock().unwrap();
+
+        // check if the path contains commands
+        if path.to_lowercase().starts_with("set") {
+            // get value from the values map
+            let values = self.values.lock().unwrap();
+            let selected = metadata
+                .get("selected")
+                .unwrap_or(&"".to_string())
+                .to_string();
+
+            let val = values.get(&selected).unwrap_or(&"".to_string()).to_string();
+
+            let set_inst = format!("set {}", val);
+
+            return vec![set_inst];
+        }
+
+        // check if the use wants to insert a value
+        if path.to_lowercase().starts_with("insert") {
+            // get value from the values map
+            let values = self.values.lock().unwrap();
+            let selected = metadata
+                .get("selected")
+                .unwrap_or(&"".to_string())
+                .to_string();
+
+            let val = values.get(&selected).unwrap_or(&"".to_string()).to_string();
+
+            let insert_inst = format!("insert {}:{}:{}", selected, val, "String");
+
+            return vec![insert_inst];
+        }
 
         // Determine the path to look up
         let lookup_path = if path.is_empty() || !path.contains('/') {
@@ -591,7 +625,7 @@ impl ParameterCompleter {
                     })
                     .collect()
             })
-            .unwrap_or_else(Vec::new)
+            .unwrap_or_default()
     }
 
     fn log(&self, message: &str) {
@@ -652,7 +686,7 @@ impl Highlighter for ParamStoreHelper {
         use colored::*; // Bring the trait into scope
 
         let parts: Vec<&str> = line.splitn(2, ' ').collect();
-        let command = parts.get(0).unwrap_or(&"");
+        let command = parts.first().unwrap_or(&"");
         let args = parts.get(1).unwrap_or(&"");
 
         if self.commands.contains(&command.to_lowercase()) {
@@ -754,96 +788,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let readline = rl.readline(">> ");
         match readline {
             Ok(line) => {
-                if line.trim().to_lowercase() == "exit" {
-                    break;
-                } else if line.trim().to_lowercase() == "refresh" {
-                    if let Some(helper) = rl.helper_mut() {
-                        if let Err(err) = helper.completer.load_parameters().await {
-                            println!("Error refreshing parameters: {}", err);
-                        } else {
-                            println!("Parameters refreshed");
-                        }
-                    }
-                    continue;
-                } else if line.trim().to_lowercase() == "reload" {
-                    if let Some(helper) = rl.helper_mut() {
-                        match reload(helper, &selected).await {
-                            Ok(value) => {
-                                println!("Reloaded value: {}", value.red());
-                                // Copy to clipboard
-                                if let Err(err) = cpboard.set_clipboard_content(&value) {
-                                    println!("Error copying to clipboard: {}", err);
-                                } else {
-                                    println!("Copied to clipboard: {}", value.red());
-                                }
-                            }
-                            Err(err) => {
-                                println!("Error reloading parameter: {}", err);
+                match line.as_str() {
+                    "exit" => break,
+                    "refresh" => {
+                        if let Some(helper) = rl.helper_mut() {
+                            match helper.completer.load_parameters().await {
+                                Ok(_) => println!("Parameters refreshed"),
+                                Err(err) => println!("Error refreshing parameters: {}", err),
                             }
                         }
+                        continue;
                     }
-                    continue;
-                } else if line.trim().to_lowercase().starts_with("set") {
-                    if let Some(helper) = rl.helper_mut() {
-                        match set_value(helper, &line, &selected).await {
-                            Ok(value) => {
-                                println!("Set value: {}", value);
-                                // Copy to clipboard
-                                if let Err(err) = cpboard.set_clipboard_content(&value) {
-                                    println!("Error copying to clipboard: {}", err);
-                                } else {
-                                    println!("Copied to clipboard: {}", value.red());
-                                }
-                            }
-                            Err(err) => {
-                                println!("Error setting parameter: {}", err);
-                            }
+                    "reload" => {
+                        if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(reload(helper, &selected).await, &mut cpboard)
+                                .await;
                         }
+                        continue;
                     }
-                    continue;
-                } else if line.trim().to_lowercase().starts_with("insert") {
-                    if let Some(helper) = rl.helper_mut() {
-                        match insert_value(helper, &line).await {
-                            Ok(value) => {
-                                println!("Inserted value: {}", value);
-                                // Copy to clipboard
-                                if let Err(err) = cpboard.set_clipboard_content(&value) {
-                                    println!("Error copying to clipboard: {}", err);
-                                } else {
-                                    println!("Copied to clipboard: {}", value.red());
-                                }
-                            }
-                            Err(err) => {
-                                println!("Error inserting parameter: {}", err);
-                            }
+                    cmd if cmd.starts_with("set") => {
+                        if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(
+                                set_value(helper, &line, &selected).await,
+                                &mut cpboard,
+                            )
+                            .await;
                         }
+                        continue;
                     }
-                    continue;
-                } else if line.trim().to_lowercase().starts_with("search") {
-                    if let Some(helper) = rl.helper_mut() {
-                        let search_term = line.replace("search ", "");
-                        let parameters = helper.completer.values.lock().unwrap();
-                        // Print all matching keys
-                        let keys = parameters
-                            .keys()
-                            .filter(|k| k.to_lowercase().contains(&search_term.to_lowercase()))
-                            .collect::<Vec<_>>();
+                    cmd if cmd.starts_with("insert") => {
+                        if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(insert_value(helper, &line).await, &mut cpboard)
+                                .await;
+                        }
+                        continue;
+                    }
+                    cmd if cmd.starts_with("search") => {
+                        if let Some(helper) = rl.helper_mut() {
+                            let search_term = line.replace("search ", "");
+                            let parameters = helper.completer.values.lock().unwrap();
 
-                        if keys.is_empty() {
-                            println!("No matching parameters found");
-                        } else {
-                            println!("Matching parameters:");
-                            for key in keys {
-                                let value = parameters.get(key).unwrap();
-                                println!("{} -> {}", key, value.red());
+                            let keys: Vec<_> = parameters
+                                .keys()
+                                .filter(|k| k.to_lowercase().contains(&search_term))
+                                .collect();
+
+                            if keys.is_empty() {
+                                println!("No matching parameters found");
+                            } else {
+                                println!("Matching parameters:");
+                                for key in keys {
+                                    let value = parameters.get(key).unwrap();
+                                    println!("{} -> {}", key, value.red());
+                                }
                             }
                         }
+                        continue;
                     }
-                    continue;
+                    _ => {}
                 }
 
                 rl.add_history_entry(line.as_str());
                 selected = line.clone();
+
+                rl.helper()
+                    .unwrap()
+                    .completer
+                    .metadata
+                    .lock()
+                    .unwrap()
+                    .insert("selected".to_string(), selected.clone());
 
                 // print the value of the selected parameter
                 rl.helper()
@@ -881,6 +895,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+async fn handle_command_result<'a>(
+    result: Result<String, Box<dyn std::error::Error>>,
+    cpboard: &mut Cpboard<'a>,
+) {
+    match result {
+        Ok(value) => {
+            println!("Result value: {}", value.red());
+            match cpboard.set_clipboard_content(&value) {
+                Ok(_) => println!("Copied to clipboard: {}", value.red()),
+                Err(err) => println!("Error copying to clipboard: {}", err),
+            }
+        }
+        Err(err) => {
+            println!("Error executing command: {}", err);
+        }
+    }
 }
 
 async fn insert_value(
@@ -1050,6 +1082,6 @@ impl<'a> Cpboard<'a> {
 
     #[allow(dead_code)]
     fn get_clipboard_content(&mut self) -> Result<String, Box<dyn std::error::Error>> {
-        Ok(self.ctx.get_contents()?)
+        self.ctx.get_contents()
     }
 }
