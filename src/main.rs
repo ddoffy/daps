@@ -730,10 +730,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let config = Config::builder()
-        .edit_mode(EditMode::Vi)
         .completion_type(CompletionType::Circular)
         .auto_add_history(true)
-        .bell_style(rustyline::config::BellStyle::Visible)
+        .bell_style(rustyline::config::BellStyle::None)
         .build();
 
     let mut rl = Editor::with_config(config)?;
@@ -824,13 +823,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(helper) = rl.helper_mut() {
                         let search_term = line.replace("search ", "");
                         let parameters = helper.completer.values.lock().unwrap();
-                        let key = parameters
+                        // Print all matching keys
+                        let keys = parameters
                             .keys()
-                            .find(|k| k.to_lowercase().contains(&search_term.to_lowercase()));
+                            .filter(|k| k.to_lowercase().contains(&search_term.to_lowercase()))
+                            .collect::<Vec<_>>();
 
-                        if let Some(key) = key {
-                            let value = parameters.get(key).unwrap();
-                            println!("{} -> {}", key, value.red());
+                        if keys.is_empty() {
+                            println!("No matching parameters found");
+                        } else {
+                            println!("Matching parameters:");
+                            for key in keys {
+                                let value = parameters.get(key).unwrap();
+                                println!("{} -> {}", key, value.red());
+                            }
                         }
                     }
                     continue;
