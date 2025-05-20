@@ -4,13 +4,14 @@ use cli_clipboard::{ClipboardContext, ClipboardProvider};
 use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
-use rustyline::Helper;
-use rustyline::completion::{Completer, Pair};
-use rustyline::error::ReadlineError;
-use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
-use rustyline::hint::{Hint, Hinter};
-use rustyline::validate::Validator;
-use rustyline::{CompletionType, Config, Context, EditMode, Editor};
+use rustyline::{
+    CompletionType, Config, Context, EditMode, Editor, Helper,
+    completion::{Completer, Pair},
+    error::ReadlineError,
+    highlight::{Highlighter, MatchingBracketHighlighter},
+    hint::{Hint, Hinter},
+    validate::Validator,
+};
 use std::borrow::Cow::{self, Borrowed, Owned};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -617,6 +618,7 @@ impl Completer for ParamStoreHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
+
         // For simplicity, we'll assume the entire line is a parameter path
         let path = line[..pos].trim();
         let start = 0; // Start completing from the beginning of the line
@@ -657,7 +659,7 @@ impl Highlighter for ParamStoreHelper {
 
         if self.commands.contains(&command.to_lowercase()) {
             // Highlight command in blue and arguments in default color
-            Owned(format!("{}{}", command.blue(), args))
+            Owned(format!("{} {}", command.blue(), args))
         } else {
             // Default: no highlighting
             Borrowed(line)
@@ -730,8 +732,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let config = Config::builder()
-        .edit_mode(EditMode::Emacs)
-        .completion_type(CompletionType::List)
+        .edit_mode(EditMode::Vi)
+        .completion_type(CompletionType::Circular)
+        .auto_add_history(true)
+        .bell_style(rustyline::config::BellStyle::Visible)
         .build();
 
     let mut rl = Editor::with_config(config)?;
@@ -753,9 +757,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let readline = rl.readline(">> ");
         match readline {
             Ok(line) => {
-                if line.trim() == "exit" {
+                if line.trim().to_lowercase() == "exit" {
                     break;
-                } else if line.trim() == "refresh" {
+                } else if line.trim().to_lowercase() == "refresh" {
                     if let Some(helper) = rl.helper_mut() {
                         if let Err(err) = helper.completer.load_parameters().await {
                             println!("Error refreshing parameters: {}", err);
@@ -764,16 +768,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     continue;
-                } else if line.trim() == "reload" {
+                } else if line.trim().to_lowercase() == "reload" {
                     if let Some(helper) = rl.helper_mut() {
                         match reload(helper, &selected).await {
                             Ok(value) => {
-                                println!("Reloaded value: {}", value);
+                                println!("Reloaded value: {}", value.red());
                                 // Copy to clipboard
                                 if let Err(err) = cpboard.set_clipboard_content(&value) {
                                     println!("Error copying to clipboard: {}", err);
                                 } else {
-                                    println!("Copied to clipboard: {}", value);
+                                    println!("Copied to clipboard: {}", value.red());
                                 }
                             }
                             Err(err) => {
@@ -782,7 +786,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     continue;
-                } else if line.trim().starts_with("set") {
+                } else if line.trim().to_lowercase().starts_with("set") {
                     if let Some(helper) = rl.helper_mut() {
                         match set_value(helper, &line, &selected).await {
                             Ok(value) => {
@@ -791,7 +795,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Err(err) = cpboard.set_clipboard_content(&value) {
                                     println!("Error copying to clipboard: {}", err);
                                 } else {
-                                    println!("Copied to clipboard: {}", value);
+                                    println!("Copied to clipboard: {}", value.red());
                                 }
                             }
                             Err(err) => {
@@ -800,7 +804,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     continue;
-                } else if line.trim().starts_with("insert") {
+                } else if line.trim().to_lowercase().starts_with("insert") {
                     if let Some(helper) = rl.helper_mut() {
                         match insert_value(helper, &line).await {
                             Ok(value) => {
@@ -809,7 +813,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Err(err) = cpboard.set_clipboard_content(&value) {
                                     println!("Error copying to clipboard: {}", err);
                                 } else {
-                                    println!("Copied to clipboard: {}", value);
+                                    println!("Copied to clipboard: {}", value.red());
                                 }
                             }
                             Err(err) => {
@@ -818,7 +822,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     continue;
-                } else if line.trim().starts_with("search") {
+                } else if line.trim().to_lowercase().starts_with("search") {
                     if let Some(helper) = rl.helper_mut() {
                         let search_term = line.replace("search ", "");
                         let parameters = helper.completer.values.lock().unwrap();
@@ -828,7 +832,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         if let Some(key) = key {
                             let value = parameters.get(key).unwrap();
-                            println!("{} -> {}", key, value);
+                            println!("{} -> {}", key, value.red());
                         }
                     }
                     continue;
