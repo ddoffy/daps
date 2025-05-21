@@ -825,7 +825,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     cmd if cmd.starts_with("search") => {
                         if let Some(helper) = rl.helper_mut() {
-                            let search_term = line.replace("search ", "");
+                            let search_term = line.replace("search", "");
+                            let search_term = search_term.trim();
                             let parameters = helper.completer.values.lock().unwrap();
 
                             let keys: Vec<_> = parameters
@@ -920,7 +921,7 @@ async fn insert_value(
     line: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     println!("Inserting parameter: {}", line);
-    let path_and_value = line.replace("insert ", "").trim_start().to_string();
+    let path_and_value = line.replace("insert", "").trim_start().to_string();
 
     // path and value: /path/to/parameter:value
     // find the first index ':' in the string
@@ -956,7 +957,8 @@ async fn set_value(
     path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     println!("Setting parameter: {}", path);
-    let value = line.replace("set ", "");
+    let value = line.replace("set", "");
+    let value = value.trim_start().to_string();
 
     // fetch the selected parameter from AWS
     let value = helper.completer.change_value(path, value).await?;
