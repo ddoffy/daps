@@ -415,6 +415,7 @@ impl ParameterCompleter {
         base_path: &str,
         paths_map: &mut HashMap<String, Vec<String>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+
         // Load parameters from a file
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/parameters_{}.txt", store_dir, base_path);
@@ -446,6 +447,7 @@ impl ParameterCompleter {
         base_path: &str,
         values_map: &mut HashMap<String, String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+
         // Load values from a file
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/values_{}.txt", store_dir, base_path);
