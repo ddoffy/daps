@@ -1,4 +1,4 @@
-use crate::encryption::{decrypt_value, encrypt_value};
+use crate::encryption::Encryption;
 use clipboard::{ClipboardContext, ClipboardProvider};
 use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
@@ -19,9 +19,6 @@ use std::sync::{Arc, Mutex};
 use structopt::StructOpt;
 
 pub mod encryption;
-
-// Encrypt and decrypt keys constant
-const ENCRYPTION_KEY: &str = "my_secret_key"; // Replace with your actual key
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -61,6 +58,7 @@ struct ParameterCompleter {
     store_dir: String,
     verbose: bool,
     metadata: Arc<Mutex<HashMap<String, String>>>,
+    encryption: Encryption,
 }
 
 impl ParameterCompleter {
@@ -70,6 +68,7 @@ impl ParameterCompleter {
         refresh: bool,
         store_dir: String,
         verbose: bool,
+        encryption: Encryption,
     ) -> Self {
         let client = SsmClient::new(region);
         let parameters = Arc::new(Mutex::new(HashMap::new()));
@@ -89,6 +88,7 @@ impl ParameterCompleter {
             store_dir,
             verbose,
             metadata,
+            encryption,
         }
     }
 
@@ -144,7 +144,7 @@ impl ParameterCompleter {
         self.log(format!("Writing value to file: {}", file_path).as_str());
 
         // encrypt the value before writing to the file
-        let encrypted_value = encrypt_value(&value);
+        let encrypted_value = self.encryption.encrypt_value(&value);
 
         // new line to insert, append to the file
         let new_line = format!("{}: {}\n", path, encrypted_value);
@@ -196,7 +196,7 @@ impl ParameterCompleter {
         // find the line index with the key in the file
 
         // encrypt the value before writing to the file
-        let encrypted_value = encrypt_value(&value);
+        let encrypted_value = self.encryption.encrypt_value(&value);
 
         replace_first_line_containing(
             &file_path,
@@ -239,7 +239,7 @@ impl ParameterCompleter {
                 // find the line index with the key in the file
 
                 // encrypt the value before writing to the file
-                let encrypted_value = encrypt_value(&value);
+                let encrypted_value = self.encryption.encrypt_value(&value);
 
                 replace_first_line_containing(
                     &file_path,
@@ -463,7 +463,7 @@ impl ParameterCompleter {
                     let key = parts[0].trim().to_string();
                     let value = parts[1].trim().to_string();
                     // decrypt the value before storing it
-                    let decrypted_value = decrypt_value(&value);
+                    let decrypted_value = self.encryption.decrypt_value(&value);
                     values_map.insert(key, decrypted_value);
                 }
             }
@@ -488,7 +488,7 @@ impl ParameterCompleter {
         // Write the values
         for (key, value) in values.iter() {
             // encrypt the value before writing to the file
-            let encrypted_value = encrypt_value(value);
+            let encrypted_value = self.encryption.encrypt_value(value);
             writeln!(file, "{}: {}", key, encrypted_value)?;
         }
 
@@ -733,6 +733,16 @@ impl Helper for ParamStoreHelper {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    // get the encryption key from the environment variable
+    let encryption_key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| {
+        println!("DAPS_ENCRYPTION_KEY not set, using default");
+        "default_key".to_string()
+    }); 
+
+    // Create an instance of the Encryption struct
+    let encryption = Encryption::new(true, encryption_key); 
+
     let opt = Opt::from_args();
 
     let region = parse_region(&opt.region).map_err(|e| format!("Invalid region: {}", e))?;
@@ -746,7 +756,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the parameter completer
     let completer =
-        ParameterCompleter::new(region, base_path, opt.refresh, opt.store_dir, opt.verbose);
+        ParameterCompleter::new(region, base_path, opt.refresh, opt.store_dir, opt.verbose, encryption);
 
     // Load parameters initially
     completer.load_parameters().await?;
@@ -766,6 +776,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let config = Config::builder()
+        .edit_mode(EditMode::Vi)
         .completion_type(CompletionType::Circular)
         .auto_add_history(true)
         .bell_style(rustyline::config::BellStyle::None)
