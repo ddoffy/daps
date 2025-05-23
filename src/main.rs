@@ -410,12 +410,52 @@ impl ParameterCompleter {
         Ok(())
     }
 
+    async fn migrate_encryption(
+        &self) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if the parameters file exists
+        let base_path = self.base_path.clone().replace('/', "_");
+        let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
+
+        if !std::path::Path::new(&file_path).exists() {
+            return Ok(());
+        }
+
+        // Read the file line by line
+        let file = File::open(&file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            if line.contains(':') {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim().to_string();
+                    let value = parts[1].trim().to_string();
+
+                    // encrypt the value before writing to the file
+                    let encrypted_value = self.encryption.encrypt_value(&value);
+
+                    lines.push(format!("{}: {}", key, encrypted_value));
+                }
+            }
+        }
+
+        // Write the updated lines back to the file
+        let mut file = File::create(&file_path)?;
+        for line in lines {
+            writeln!(file, "{}", line)?;
+        }
+
+        self.log("Migration completed");
+
+        Ok(())
+    }
+
     fn load_parameters_from_file(
         &self,
         base_path: &str,
         paths_map: &mut HashMap<String, Vec<String>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-
         // Load parameters from a file
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/parameters_{}.txt", store_dir, base_path);
@@ -447,7 +487,6 @@ impl ParameterCompleter {
         base_path: &str,
         values_map: &mut HashMap<String, String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-
         // Load values from a file
         let store_dir = self.store_dir.clone();
         let file_path = format!("{}/values_{}.txt", store_dir, base_path);
@@ -733,15 +772,14 @@ impl Helper for ParamStoreHelper {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-
     // get the encryption key from the environment variable
     let encryption_key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| {
         println!("DAPS_ENCRYPTION_KEY not set, using default");
         "default_key".to_string()
-    }); 
+    });
 
     // Create an instance of the Encryption struct
-    let encryption = Encryption::new(true, encryption_key); 
+    let encryption = Encryption::new(true, encryption_key);
 
     let opt = Opt::from_args();
 
@@ -754,9 +792,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Base path must start with '/'".into());
     }
 
+    // Get home path for the store directory
+    #[cfg(not(target_os = "windows"))]
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| {
+        println!("HOME environment variable not set, using current directory");
+        ".".to_string()
+    });
+
+    // For Windows, use the APPDATA directory
+    #[cfg(target_os = "windows")]
+    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| {
+        println!("APPDATA environment variable not set, using current directory");
+        ".".to_string()
+    });
+
+    // Check if path is absolute in a platform-appropriate way
+    let is_absolute = if cfg!(target_os = "windows") {
+        // Windows absolute paths typically start with drive letter followed by ":"
+        opt.store_dir.chars().nth(1) == Some(':')
+    } else {
+        // Unix-like absolute paths start with "/"
+        opt.store_dir.starts_with('/')
+    };
+
+    // Construct store directory path
+    let store_dir = if is_absolute {
+        opt.store_dir.clone() // Use absolute path as-is
+    } else {
+        format!("{}/{}", home_dir, opt.store_dir) // Join with home directory
+    };
+
     // Create the parameter completer
-    let completer =
-        ParameterCompleter::new(region, base_path, opt.refresh, opt.store_dir, opt.verbose, encryption);
+    let completer = ParameterCompleter::new(
+        region,
+        base_path,
+        opt.refresh,
+        store_dir,
+        opt.verbose,
+        encryption
+    );
 
     // Load parameters initially
     completer.load_parameters().await?;
@@ -772,6 +846,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "set".to_string(),
             "insert".to_string(),
             "search".to_string(),
+            "migration".to_string(),
         ],
     };
 
@@ -812,6 +887,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         continue;
                     }
+                    "migration" => {
+                        if let Some(helper) = rl.helper_mut() {
+                            match helper.completer.migrate_encryption().await {
+                                Ok(_) => println!("Migration completed"),
+                                Err(err) => println!("Error during migration: {}", err),
+                            }
+                        }
+                        continue;
+                    }
+
                     "reload" => {
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(reload(helper, &selected).await, &mut cpboard)
