@@ -4,12 +4,12 @@ use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
 use rustyline::{
-    CompletionType, Config, Context, EditMode, Editor, Helper,
     completion::{Completer, Pair},
     error::ReadlineError,
     highlight::{Highlighter, MatchingBracketHighlighter},
     hint::{Hint, Hinter},
     validate::Validator,
+    CompletionType, Config, Context, EditMode, Editor, Helper,
 };
 use std::borrow::Cow::{self, Borrowed, Owned};
 use std::collections::HashMap;
@@ -139,9 +139,19 @@ impl ParameterCompleter {
         // add the value to the values map
         values.insert(path.to_string(), value.to_string());
 
+        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
+            "\\"
+        } else {
+            "/"
+        };
+
         // Write the updated value to the file
-        let base_path = self.base_path.clone().replace('/', "_");
-        let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
+        let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\values_{}.txt", self.store_dir, base_path)
+        } else {
+            format!("{}/values_{}.txt", self.store_dir, base_path)
+        };
 
         self.log(format!("Writing value to file: {}", file_path).as_str());
 
@@ -192,9 +202,18 @@ impl ParameterCompleter {
         let mut values = self.values.lock().unwrap();
         values.insert(path.to_string(), value.clone());
 
+        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
+            "\\"
+        } else {
+            "/"
+        };
         // Write the updated value to the file
-        let base_path = self.base_path.clone().replace('/', "_");
-        let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
+        let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\values_{}.txt", self.store_dir, base_path)
+        } else {
+            format!("{}/values_{}.txt", self.store_dir, base_path)
+        };
         // find the line index with the key in the file
 
         // encrypt the value before writing to the file
@@ -235,9 +254,19 @@ impl ParameterCompleter {
                     .unwrap()
                     .insert(path.to_string(), value.clone());
 
+                let symbol_to_be_replaced = if cfg!(target_os = "windows") {
+                    "\\"
+                } else {
+                    "/"
+                };
                 // Write the updated value to the file
-                let base_path = self.base_path.clone().replace('/', "_");
-                let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
+                let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
+                let file_path = if cfg!(target_os = "windows") {
+                    format!("{}\\values_{}.txt", self.store_dir, base_path)
+                } else {
+                    format!("{}/values_{}.txt", self.store_dir, base_path)
+                };
+
                 // find the line index with the key in the file
 
                 // encrypt the value before writing to the file
@@ -299,7 +328,12 @@ impl ParameterCompleter {
         if !self.refresh {
             // Check if the parameters and values file exists
             self.log("Checking for existing parameters and values files...");
-            let base_path = self.base_path.clone().replace('/', "_");
+            let symbol_to_be_replaced = if cfg!(target_os = "windows") {
+                "\\"
+            } else {
+                "/"
+            };
+            let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
 
             // if parameters file exists, load them
             if let Err(e) = self.load_parameters_from_file(base_path.as_str(), &mut paths_map) {
@@ -395,8 +429,13 @@ impl ParameterCompleter {
         *values = values_d.clone();
 
         let base_path = self.base_path.clone();
+        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
+            "\\"
+        } else {
+            "/"
+        };
         // Write the values to a file to persist them
-        let base_path = base_path.replace('/', "_");
+        let base_path = base_path.replace(symbol_to_be_replaced, "_");
 
         // Write the parameters and values to a file to persist them
         // avoid reloading them every time
@@ -416,8 +455,17 @@ impl ParameterCompleter {
 
     async fn migrate_encryption(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Check if the parameters file exists
-        let base_path = self.base_path.clone().replace('/', "_");
-        let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
+        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
+            "\\"
+        } else {
+            "/"
+        };
+        let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\values_{}.txt", self.store_dir, base_path)
+        } else {
+            format!("{}/values_{}.txt", self.store_dir, base_path)
+        };
 
         if !std::path::Path::new(&file_path).exists() {
             return Ok(());
@@ -461,7 +509,12 @@ impl ParameterCompleter {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Load parameters from a file
         let store_dir = self.store_dir.clone();
-        let file_path = format!("{}/parameters_{}.txt", store_dir, base_path);
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\parameters_{}.txt", store_dir, base_path)
+        } else {
+            format!("{}/parameters_{}.txt", store_dir, base_path)
+        };
+
         self.log(format!("Loading parameters from file: {}", file_path).as_str());
         let file = File::open(file_path)?;
         let reader = io::BufReader::new(file);
@@ -492,7 +545,12 @@ impl ParameterCompleter {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Load values from a file
         let store_dir = self.store_dir.clone();
-        let file_path = format!("{}/values_{}.txt", store_dir, base_path);
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\values_{}.txt", store_dir, base_path)
+        } else {
+            format!("{}/values_{}.txt", store_dir, base_path)
+        };
+
         self.log(format!("Loading values from file: {}", file_path).as_str());
         let file = File::open(file_path)?;
         let reader = io::BufReader::new(file);
@@ -521,7 +579,11 @@ impl ParameterCompleter {
         self.log("Writing values to file...");
         self.log(format!("Len of values: {}", values.len()).as_str());
         let store_dir = self.store_dir.clone();
-        let file_path = format!("{}/values_{}.txt", store_dir, base_path);
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\values_{}.txt", store_dir, base_path)
+        } else {
+            format!("{}/values_{}.txt", store_dir, base_path)
+        };
 
         self.log(format!("File path: {}", file_path).as_str());
         // Open a file to write the parameters and values
@@ -547,7 +609,12 @@ impl ParameterCompleter {
         self.log("Writing parameters to file...");
         self.log(format!("Len of parameters: {}", parameters.len()).as_str());
         let store_dir = self.store_dir.clone();
-        let file_path = format!("{}/parameters_{}.txt", store_dir, base_path);
+        let file_path = if cfg!(target_os = "windows") {
+            format!("{}\\parameters_{}.txt", store_dir, base_path)
+        } else {
+            format!("{}/parameters_{}.txt", store_dir, base_path)
+        };
+
         // Open a file to write the parameters and values
         let mut file = File::create(file_path)?;
         // Write the parameters

@@ -1,6 +1,6 @@
 [package]
 name = "daps"
-version = "0.1.6"
+version = "0.1.8"
 edition = "2024"
 description = "A command-line tool for managing AWS Systems Manager Parameter Store"
 license = "MIT"
