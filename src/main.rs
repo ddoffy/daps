@@ -59,6 +59,7 @@ struct ParameterCompleter {
     verbose: bool,
     metadata: Arc<Mutex<HashMap<String, String>>>,
     encryption: Encryption,
+    search_result: Arc<Mutex<Vec<String>>>,
 }
 
 impl ParameterCompleter {
@@ -89,6 +90,7 @@ impl ParameterCompleter {
             verbose,
             metadata,
             encryption,
+            search_result: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -260,7 +262,9 @@ impl ParameterCompleter {
 
     fn add_commands(&self, paths_map: &mut HashMap<String, Vec<String>>) {
         // Add commands to the parameters map
+        //
         paths_map.insert("set".to_string(), Vec::new());
+        paths_map.insert("select".to_string(), Vec::new());
         paths_map.insert("insert".to_string(), Vec::new());
         paths_map.insert("search".to_string(), Vec::new());
         paths_map.insert("refresh".to_string(), Vec::new());
@@ -410,8 +414,7 @@ impl ParameterCompleter {
         Ok(())
     }
 
-    async fn migrate_encryption(
-        &self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn migrate_encryption(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Check if the parameters file exists
         let base_path = self.base_path.clone().replace('/', "_");
         let file_path = format!("{}/values_{}.txt", self.store_dir, base_path);
@@ -829,7 +832,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         opt.refresh,
         store_dir,
         opt.verbose,
-        encryption
+        encryption,
     );
 
     // Load parameters initially
@@ -844,6 +847,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "refresh".to_string(),
             "reload".to_string(),
             "set".to_string(),
+            "select".to_string(),
             "insert".to_string(),
             "search".to_string(),
             "migration".to_string(),
@@ -914,6 +918,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         continue;
                     }
+                    cmd if cmd.starts_with("sel") => {
+                        if let Some(helper) = rl.helper_mut() {
+                            // Select the parameter and update the metadata
+                            let selected_param =
+                                line.replace(line.split(' ').nth(0).unwrap_or_default(), "");
+                            let selected_param = selected_param.trim();
+
+                            if selected_param.is_empty() {
+                                println!("No parameter selected");
+                                continue;
+                            }
+
+                            // try convert selected_param to a number
+                            let selected_param = if let Ok(index) = selected_param.parse::<usize>()
+                            {
+                                // Get the search result from the metadata
+                                let search_result =
+                                    helper.completer.search_result.lock().unwrap().clone();
+                                if index < search_result.len() {
+                                    search_result[index].clone()
+                                } else {
+                                    println!("Invalid index selected");
+                                    continue;
+                                }
+                            } else {
+                                "".to_string()
+                            };
+
+                            if selected_param.is_empty() {
+                                println!("No parameter selected");
+                                continue;
+                            }
+
+                            selected = selected_param.clone();
+
+                            helper
+                                .completer
+                                .metadata
+                                .lock()
+                                .unwrap()
+                                .insert("selected".to_string(), selected_param.to_string());
+
+                            println!("Selected parameter: {}", selected_param.green());
+                        }
+                        continue;
+                    }
                     cmd if cmd.starts_with("insert") => {
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(insert_value(helper, &line).await, &mut cpboard)
@@ -936,11 +986,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("No matching parameters found");
                             } else {
                                 println!("Matching parameters:");
-                                for key in keys {
-                                    let value = parameters.get(key).unwrap();
-                                    println!("{} -> {}", key, value.red());
+                                for (index, key) in keys.iter().enumerate() {
+                                    let value = parameters.get(*key).unwrap();
+                                    println!(
+                                        "{}: {} -> {}",
+                                        index.to_string().yellow(),
+                                        key,
+                                        value.red()
+                                    );
                                 }
                             }
+
+                            // Store the search result in the shared state
+                            let mut search_result = helper.completer.search_result.lock().unwrap();
+                            *search_result = keys.iter().map(|k| k.to_string()).collect();
                         }
                         continue;
                     }
