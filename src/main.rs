@@ -4,12 +4,12 @@ use colored::Colorize;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
 use rustyline::{
+    CompletionType, Config, Context, EditMode, Editor, Helper,
     completion::{Completer, Pair},
     error::ReadlineError,
     highlight::{Highlighter, MatchingBracketHighlighter},
     hint::{Hint, Hinter},
     validate::Validator,
-    CompletionType, Config, Context, EditMode, Editor, Helper,
 };
 use std::borrow::Cow::{self, Borrowed, Owned};
 use std::collections::HashMap;
@@ -230,6 +230,46 @@ impl ParameterCompleter {
         Ok(value)
     }
 
+    async fn get_set_values(
+        &self,
+        paths: &str
+    ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+        let mut results = HashMap::new();
+
+        let request = GetParametersByPathRequest {
+            path: paths.to_string(),
+            recursive: Some(true),
+            with_decryption: Some(true),
+            ..Default::default()
+        };
+
+        // Fetch the parameters from AWS
+        self.log(format!("Fetching parameters from path: {}", paths).as_str());
+        let result = self.client.get_parameters_by_path(request).await?;
+
+        if let Some(params) = result.parameters {
+            for param in params {
+                if let Some(name) = param.name {
+                    if let Some(value) = param.value {
+                        // Store the value in the results map
+                        results.insert(name.clone(), value.clone());
+
+                        // Store the value in the values map
+                        self.update_all(name.as_str(), value).await?;
+                    }
+                }
+            }
+        }
+
+        self.log(format!("Fetched {} parameters", results.len()).as_str());
+        if results.is_empty() {
+            self.log("No parameters found in the specified path");
+        } else {
+            self.log("Parameters fetched successfully");
+        }
+        Ok(results)
+    }
+
     async fn get_set_value(
         &self,
         path: &str,
@@ -261,22 +301,41 @@ impl ParameterCompleter {
                 };
                 // Write the updated value to the file
                 let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
-                let file_path = if cfg!(target_os = "windows") {
+                let values_file_path = if cfg!(target_os = "windows") {
                     format!("{}\\values_{}.txt", self.store_dir, base_path)
                 } else {
                     format!("{}/values_{}.txt", self.store_dir, base_path)
                 };
 
+                let parameters = self.parameters.lock().unwrap();
+
                 // find the line index with the key in the file
+                let path_exists = parameters.contains_key(path);
+                // Check if the path exists in the parameters file
+
+                // release lock before writing to the file
+                drop(parameters);
 
                 // encrypt the value before writing to the file
                 let encrypted_value = self.encryption.encrypt_value(&value);
 
-                replace_first_line_containing(
-                    &file_path,
-                    path,
-                    format!("{}: {}", path, encrypted_value).as_str(),
-                )?;
+                if !path_exists {
+                    // Write the parameters to the file
+                    match self.update_all(path, value.to_string()).await {
+                        Ok(_) => {
+                            self.log(format!("Added parameter: {}", path).as_str());
+                        }
+                        Err(e) => {
+                            self.log(format!("Error adding parameter: {}", e).as_str());
+                        }
+                    }
+                } else {
+                    replace_first_line_containing(
+                        &values_file_path,
+                        path,
+                        format!("{}: {}", path, encrypted_value).as_str(),
+                    )?;
+                }
 
                 self.log(format!("Updated parameter: {}", path).as_str());
 
@@ -298,6 +357,8 @@ impl ParameterCompleter {
         paths_map.insert("search".to_string(), Vec::new());
         paths_map.insert("refresh".to_string(), Vec::new());
         paths_map.insert("reload".to_string(), Vec::new());
+        paths_map.insert("reload-by-path".to_string(), Vec::new());
+        paths_map.insert("reload-by-paths".to_string(), Vec::new());
         paths_map.insert("exit".to_string(), Vec::new());
     }
 
@@ -915,6 +976,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "reload".to_string(),
             "set".to_string(),
             "select".to_string(),
+            "sel".to_string(),
+            "reload-by-path".to_string(),
+            "reload-by-paths".to_string(),
             "insert".to_string(),
             "search".to_string(),
             "migration".to_string(),
@@ -971,6 +1035,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "reload" => {
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(reload(helper, &selected).await, &mut cpboard)
+                                .await;
+                        }
+                        continue;
+                    }
+                    cmd if cmd.starts_with("reload-by-paths") => {
+                        if let Some(helper) = rl.helper_mut() {
+                            // Extract the path from the command
+                            let paths = line.replace("reload-by-paths", "");
+                            let paths = paths.trim();
+
+                            if paths.is_empty() {
+                                println!("No paths provided for reload");
+                                continue;
+                            }
+                            reload_by_paths(helper, paths).await?;
+                        }
+                        continue;
+                    }
+                    cmd if cmd.starts_with("reload-by-path") => {
+                        if let Some(helper) = rl.helper_mut() {
+                            // Extract the path from the command
+                            let path = line.replace("reload-by-path", "");
+                            let path = path.trim();
+
+                            if path.is_empty() {
+                                println!("No path provided for reload");
+                                continue;
+                            }
+                            handle_command_result(reload_by_path(helper, path).await, &mut cpboard)
                                 .await;
                         }
                         continue;
@@ -1201,6 +1294,36 @@ async fn reload(
     println!("Reloaded value: {}", value);
 
     Ok(value)
+}
+
+async fn reload_by_path(
+    helper: &mut ParamStoreHelper,
+    path: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    println!("Reloading parameter by path: {}", path);
+    // fetch the selected parameter from AWS
+    let value = helper.completer.get_set_value(path).await?;
+    println!("Reloaded value: {}", value);
+
+    Ok(value)
+}
+
+async fn reload_by_paths(
+    helper: &mut ParamStoreHelper,
+    paths: &str,
+) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    println!("Reloading parameters by paths: {:?}", paths);
+
+    let values = helper.completer.get_set_values(paths).await?;
+
+    if values.is_empty() {
+        println!("No parameters found for the given paths");
+    } else {
+        for (key, value) in &values {
+            println!("{}: {}", key.green(), value.red());
+        }
+    }
+    Ok(values)
 }
 
 fn parse_region(region: &str) -> Result<Region, String> {
