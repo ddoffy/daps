@@ -236,7 +236,7 @@ impl ParameterCompleter {
     ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
         let mut results = HashMap::new();
 
-        let request = GetParametersByPathRequest {
+        let mut request = GetParametersByPathRequest {
             path: paths.to_string(),
             recursive: Some(true),
             with_decryption: Some(true),
@@ -245,18 +245,35 @@ impl ParameterCompleter {
 
         // Fetch the parameters from AWS
         self.log(format!("Fetching parameters from path: {}", paths).as_str());
-        let result = self.client.get_parameters_by_path(request).await?;
+        let result = self.client.get_parameters_by_path(request.clone()).await?;
 
-        if let Some(params) = result.parameters {
-            for param in params {
-                if let Some(name) = param.name {
-                    if let Some(value) = param.value {
-                        // Store the value in the results map
-                        results.insert(name.clone(), value.clone());
+        if result.parameters.is_none() {
+            self.log("No parameters found in the specified path");
+            return Ok(results);
+        }
 
-                        // Store the value in the values map
-                        self.update_all(name.as_str(), value).await?;
-                    }
+        let mut result_parameters =  result.parameters.unwrap();
+
+        let mut next_token = result.next_token;
+
+        while let Some(token) = next_token {
+            // If there is a next token, update the request and fetch the next set of parameters
+            request.next_token = Some(token);
+            let next_result = self.client.get_parameters_by_path(request.clone()).await?;
+            if let Some(params) = next_result.parameters {
+                result_parameters.extend(params);
+            }
+            next_token = next_result.next_token;
+        }
+
+        for param in result_parameters {
+            if let Some(name) = param.name {
+                if let Some(value) = param.value {
+                    // Store the value in the results map
+                    results.insert(name.clone(), value.clone());
+
+                    // Store the value in the values map
+                    self.update_all(name.as_str(), value).await?;
                 }
             }
         }
