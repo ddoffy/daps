@@ -63,6 +63,20 @@ struct ParameterCompleter {
 }
 
 impl ParameterCompleter {
+    /// Helper function to create platform-appropriate file paths for parameter storage
+    fn get_file_path(&self, base_path: &str, file_type: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!("{}\\{}_{}.txt", self.store_dir, file_type, base_path)
+        } else {
+            format!("{}/{}_{}.txt", self.store_dir, file_type, base_path)
+        }
+    }
+
+    /// Helper function to create a sanitized base path from the parameter path
+    fn get_sanitized_base_path(&self) -> String {
+        self.base_path.replace('/', "_")
+    }
+
     fn new(
         region: Region,
         base_path: String,
@@ -128,7 +142,10 @@ impl ParameterCompleter {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Update all parameters with the new value
         let mut parameters = self.parameters.lock().unwrap();
-        let mut values = self.values.lock().unwrap();
+        let mut values = self
+            .values
+            .lock()
+            .map_err(|e| format!("Failed to lock values: {}", e))?;
 
         self.log(format!("Updating parameter: {}", path).as_str());
         self.log(format!("New value: {}", value).as_str());
@@ -139,19 +156,9 @@ impl ParameterCompleter {
         // add the value to the values map
         values.insert(path.to_string(), value.to_string());
 
-        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
-            "\\"
-        } else {
-            "/"
-        };
-
         // Write the updated value to the file
-        let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
-        let file_path = if cfg!(target_os = "windows") {
-            format!("{}\\values_{}.txt", self.store_dir, base_path)
-        } else {
-            format!("{}/values_{}.txt", self.store_dir, base_path)
-        };
+        let base_path = self.get_sanitized_base_path();
+        let file_path = self.get_file_path(&base_path, "values");
 
         self.log(format!("Writing value to file: {}", file_path).as_str());
 
@@ -199,21 +206,15 @@ impl ParameterCompleter {
         self.log(format!("Setting parameter: {}", path).as_str());
 
         // Update the values map with the new value
-        let mut values = self.values.lock().unwrap();
+        let mut values = self
+            .values
+            .lock()
+            .map_err(|e| format!("Failed to lock values: {}", e))?;
         values.insert(path.to_string(), value.clone());
 
-        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
-            "\\"
-        } else {
-            "/"
-        };
         // Write the updated value to the file
-        let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
-        let file_path = if cfg!(target_os = "windows") {
-            format!("{}\\values_{}.txt", self.store_dir, base_path)
-        } else {
-            format!("{}/values_{}.txt", self.store_dir, base_path)
-        };
+        let base_path = self.get_sanitized_base_path();
+        let file_path = self.get_file_path(&base_path, "values");
         // find the line index with the key in the file
 
         // encrypt the value before writing to the file
@@ -232,7 +233,7 @@ impl ParameterCompleter {
 
     async fn get_set_values(
         &self,
-        paths: &str
+        paths: &str,
     ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
         let mut results = HashMap::new();
 
@@ -252,7 +253,7 @@ impl ParameterCompleter {
             return Ok(results);
         }
 
-        let mut result_parameters =  result.parameters.unwrap();
+        let mut result_parameters = result.parameters.unwrap();
 
         let mut next_token = result.next_token;
 
@@ -306,23 +307,14 @@ impl ParameterCompleter {
         if let Some(param) = result.parameter {
             if let Some(value) = param.value {
                 // Store the value in the values map
-                self.values
-                    .lock()
-                    .unwrap()
-                    .insert(path.to_string(), value.clone());
+                {
+                    let mut values = self.values.lock().unwrap();
+                    values.insert(path.to_string(), value.clone());
+                }
 
-                let symbol_to_be_replaced = if cfg!(target_os = "windows") {
-                    "\\"
-                } else {
-                    "/"
-                };
                 // Write the updated value to the file
-                let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
-                let values_file_path = if cfg!(target_os = "windows") {
-                    format!("{}\\values_{}.txt", self.store_dir, base_path)
-                } else {
-                    format!("{}/values_{}.txt", self.store_dir, base_path)
-                };
+                let base_path = self.get_sanitized_base_path();
+                let values_file_path = self.get_file_path(&base_path, "values");
 
                 let parameters = self.parameters.lock().unwrap();
 
@@ -382,10 +374,10 @@ impl ParameterCompleter {
     async fn load_parameters(
         &self,
     ) -> Result<(), RusotoError<rusoto_ssm::GetParametersByPathError>> {
-        let mut parameters = self.parameters.lock().unwrap();
+        let mut parameters = self.parameters.lock().expect("Failed to lock parameters");
         parameters.clear();
 
-        let mut values = self.values.lock().unwrap();
+        let mut values = self.values.lock().expect("Failed to lock values");
         values.clear();
 
         // Create a HashMap to store paths and their children
@@ -406,12 +398,7 @@ impl ParameterCompleter {
         if !self.refresh {
             // Check if the parameters and values file exists
             self.log("Checking for existing parameters and values files...");
-            let symbol_to_be_replaced = if cfg!(target_os = "windows") {
-                "\\"
-            } else {
-                "/"
-            };
-            let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
+            let base_path = self.base_path.replace('/', "_");
 
             // if parameters file exists, load them
             if let Err(e) = self.load_parameters_from_file(base_path.as_str(), &mut paths_map) {
@@ -476,7 +463,7 @@ impl ParameterCompleter {
                 break;
             }
 
-            let len = result.parameters.as_ref().unwrap().len();
+            let len = result.parameters.as_ref().map_or(0, |p| p.len());
             self.log(format!("Fetched {} parameters", len).as_str());
 
             total += len;
@@ -506,14 +493,8 @@ impl ParameterCompleter {
         *parameters = paths_map.clone();
         *values = values_d.clone();
 
-        let base_path = self.base_path.clone();
-        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
-            "\\"
-        } else {
-            "/"
-        };
         // Write the values to a file to persist them
-        let base_path = base_path.replace(symbol_to_be_replaced, "_");
+        let base_path = self.base_path.replace('/', "_");
 
         // Write the parameters and values to a file to persist them
         // avoid reloading them every time
@@ -533,17 +514,8 @@ impl ParameterCompleter {
 
     async fn migrate_encryption(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Check if the parameters file exists
-        let symbol_to_be_replaced = if cfg!(target_os = "windows") {
-            "\\"
-        } else {
-            "/"
-        };
-        let base_path = self.base_path.clone().replace(symbol_to_be_replaced, "_");
-        let file_path = if cfg!(target_os = "windows") {
-            format!("{}\\values_{}.txt", self.store_dir, base_path)
-        } else {
-            format!("{}/values_{}.txt", self.store_dir, base_path)
-        };
+        let base_path = self.get_sanitized_base_path();
+        let file_path = self.get_file_path(&base_path, "values");
 
         if !std::path::Path::new(&file_path).exists() {
             return Ok(());
@@ -558,13 +530,10 @@ impl ParameterCompleter {
             if line.contains(':') {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() == 2 {
-                    let key = parts[0].trim().to_string();
-                    let value = parts[1].trim().to_string();
+                    let key = parts[0].trim();
+                    let value = parts[1].trim();
 
-                    // encrypt the value before writing to the file
-                    let encrypted_value = self.encryption.encrypt_value(&value);
-
-                    lines.push(format!("{}: {}", key, encrypted_value));
+                    lines.push(format!("{}: {}", key, self.encryption.encrypt_value(value)));
                 }
             }
         }
@@ -586,7 +555,7 @@ impl ParameterCompleter {
         paths_map: &mut HashMap<String, Vec<String>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Load parameters from a file
-        let store_dir = self.store_dir.clone();
+        let store_dir = &self.store_dir;
         let file_path = if cfg!(target_os = "windows") {
             format!("{}\\parameters_{}.txt", store_dir, base_path)
         } else {
@@ -605,8 +574,8 @@ impl ParameterCompleter {
             if line.contains(':') {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() == 2 {
-                    let path = parts[0].trim().to_string();
-                    self.process_parameter_path(&path, paths_map);
+                    let path = parts[0].trim();
+                    self.process_parameter_path(path, paths_map);
                 }
             }
         }
@@ -622,7 +591,7 @@ impl ParameterCompleter {
         values_map: &mut HashMap<String, String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Load values from a file
-        let store_dir = self.store_dir.clone();
+        let store_dir = &self.store_dir;
         let file_path = if cfg!(target_os = "windows") {
             format!("{}\\values_{}.txt", store_dir, base_path)
         } else {
@@ -638,11 +607,9 @@ impl ParameterCompleter {
             if line.contains(':') {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() == 2 {
-                    let key = parts[0].trim().to_string();
-                    let value = parts[1].trim().to_string();
-                    // decrypt the value before storing it
-                    let decrypted_value = self.encryption.decrypt_value(&value);
-                    values_map.insert(key, decrypted_value);
+                    let key = parts[0].trim().to_owned();
+                    let value = parts[1].trim().to_owned();
+                    values_map.insert(key, self.encryption.decrypt_value(&value));
                 }
             }
         }
@@ -656,7 +623,7 @@ impl ParameterCompleter {
     ) -> io::Result<()> {
         self.log("Writing values to file...");
         self.log(format!("Len of values: {}", values.len()).as_str());
-        let store_dir = self.store_dir.clone();
+        let store_dir = &self.store_dir;
         let file_path = if cfg!(target_os = "windows") {
             format!("{}\\values_{}.txt", store_dir, base_path)
         } else {
@@ -686,7 +653,7 @@ impl ParameterCompleter {
     ) -> io::Result<()> {
         self.log("Writing parameters to file...");
         self.log(format!("Len of parameters: {}", parameters.len()).as_str());
-        let store_dir = self.store_dir.clone();
+        let store_dir = &self.store_dir;
         let file_path = if cfg!(target_os = "windows") {
             format!("{}\\parameters_{}.txt", store_dir, base_path)
         } else {
@@ -742,13 +709,19 @@ impl ParameterCompleter {
     }
 
     fn get_completions(&self, path: &str) -> Vec<String> {
-        let parameters = self.parameters.lock().unwrap();
-        let metadata = self.metadata.lock().unwrap();
+        let Ok(parameters) = self.parameters.lock() else {
+            return Vec::new();
+        };
+        let Ok(metadata) = self.metadata.lock() else {
+            return Vec::new();
+        };
 
         // check if the path contains commands
         if path.to_lowercase().starts_with("set") {
             // get value from the values map
-            let values = self.values.lock().unwrap();
+            let Ok(values) = self.values.lock() else {
+                return Vec::new();
+            };
             let selected = metadata
                 .get("selected")
                 .unwrap_or(&"".to_string())
@@ -764,7 +737,9 @@ impl ParameterCompleter {
         // check if the use wants to insert a value
         if path.to_lowercase().starts_with("insert") {
             // get value from the values map
-            let values = self.values.lock().unwrap();
+            let Ok(values) = self.values.lock() else {
+                return Vec::new();
+            };
             let selected = metadata
                 .get("selected")
                 .unwrap_or(&"".to_string())
@@ -782,7 +757,7 @@ impl ParameterCompleter {
             "/".to_string()
         } else {
             // Extract the parent path
-            let last_slash = path.rfind('/').unwrap();
+            let last_slash = path.rfind('/').unwrap_or(0);
             if last_slash == 0 {
                 "/".to_string()
             } else {
@@ -792,8 +767,7 @@ impl ParameterCompleter {
 
         // Get prefix for filtering completions
         let prefix = if path.contains('/') {
-            let parts: Vec<&str> = path.split('/').collect();
-            parts.last().unwrap_or(&"").to_string()
+            path.split('/').last().unwrap_or("").to_string()
         } else {
             path.to_string()
         };
@@ -1020,7 +994,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Type '{}' to quit", "exit".yellow());
 
     // Create clipboard context
-    let mut ctx = ClipboardProvider::new().unwrap();
+    let mut ctx = ClipboardProvider::new()
+        .map_err(|e| format!("Failed to create clipboard context: {}", e))?;
     let mut cpboard = Cpboard::new(&mut ctx);
 
     let mut selected = String::new();
@@ -1111,8 +1086,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let selected_param = if let Ok(index) = selected_param.parse::<usize>()
                             {
                                 // Get the search result from the metadata
-                                let search_result =
-                                    helper.completer.search_result.lock().unwrap().clone();
+                                let search_result = match helper.completer.search_result.lock() {
+                                    Ok(result) => result.clone(),
+                                    Err(_) => {
+                                        println!("Failed to access search results");
+                                        continue;
+                                    }
+                                };
                                 if index < search_result.len() {
                                     search_result[index].clone()
                                 } else {
@@ -1130,12 +1110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             selected = selected_param.clone();
 
-                            helper
-                                .completer
-                                .metadata
-                                .lock()
-                                .unwrap()
-                                .insert("selected".to_string(), selected_param.to_string());
+                            if let Ok(mut metadata) = helper.completer.metadata.lock() {
+                                metadata.insert("selected".to_string(), selected_param.to_string());
+                            }
 
                             println!("Selected parameter: {}", selected_param.green());
                         }
@@ -1152,7 +1129,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(helper) = rl.helper_mut() {
                             let search_term = line.replace("search", "");
                             let search_term = search_term.trim();
-                            let parameters = helper.completer.values.lock().unwrap();
+                            let parameters = match helper.completer.values.lock() {
+                                Ok(params) => params,
+                                Err(_) => {
+                                    println!("Failed to access parameters for search");
+                                    continue;
+                                }
+                            };
 
                             let keys: Vec<_> = parameters
                                 .keys()
@@ -1164,7 +1147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 println!("Matching parameters:");
                                 for (index, key) in keys.iter().enumerate() {
-                                    let value = parameters.get(*key).unwrap();
+                                    let default_value = "<unavailable>".to_string();
+                                    let value = parameters.get(*key).unwrap_or(&default_value);
                                     println!(
                                         "{}: {} -> {}",
                                         index.to_string().yellow(),
@@ -1175,8 +1159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // Store the search result in the shared state
-                            let mut search_result = helper.completer.search_result.lock().unwrap();
-                            *search_result = keys.iter().map(|k| k.to_string()).collect();
+                            if let Ok(mut search_result) = helper.completer.search_result.lock() {
+                                *search_result = keys.iter().map(|k| k.to_string()).collect();
+                            }
                         }
                         continue;
                     }
@@ -1186,33 +1171,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rl.add_history_entry(line.as_str());
                 selected = line.clone();
 
-                rl.helper()
-                    .unwrap()
-                    .completer
-                    .metadata
-                    .lock()
-                    .unwrap()
-                    .insert("selected".to_string(), selected.clone());
+                if let Some(helper) = rl.helper() {
+                    if let Ok(mut metadata) = helper.completer.metadata.lock() {
+                        metadata.insert("selected".to_string(), selected.clone());
+                    }
+                }
 
                 // print the value of the selected parameter
-                rl.helper()
-                    .unwrap()
-                    .completer
-                    .values
-                    .lock()
-                    .unwrap()
-                    .get(&line)
-                    .map(|v| {
-                        // print with colored output to highlight the parameter
-                        println!("You selected: {}", selected.green());
-                        println!("Value: {}", v.red());
-                        // Copy to clipboard
-                        if let Err(err) = cpboard.set_clipboard_content(v) {
-                            println!("Error copying to clipboard: {}", err);
-                        } else {
-                            println!("Copied to clipboard: {}", v);
+                if let Some(helper) = rl.helper() {
+                    if let Ok(values) = helper.completer.values.lock() {
+                        if let Some(v) = values.get(&line) {
+                            // print with colored output to highlight the parameter
+                            println!("You selected: {}", selected.green());
+                            println!("Value: {}", v.red());
+                            // Copy to clipboard
+                            if let Err(err) = cpboard.set_clipboard_content(v) {
+                                println!("Error copying to clipboard: {}", err);
+                            } else {
+                                println!("Copied to clipboard: {}", v);
+                            }
                         }
-                    });
+                    }
+                }
             }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
