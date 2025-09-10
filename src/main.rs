@@ -11,7 +11,7 @@ use rustyline::{
     hint::{Hint, Hinter},
     validate::Validator,
 };
-use std::borrow::Cow::{self, Borrowed, Owned};
+use std::{borrow::Cow::{self, Borrowed, Owned}, path};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
@@ -1179,19 +1179,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // print the value of the selected parameter
                 if let Some(helper) = rl.helper() {
+                    // we will print recursive if the parameter is a path
+                    // if the parameter is a path, we need to fetch its value recursively
+                    // get all path that starts with `line`
+                    let mut paths = Vec::new();
                     if let Ok(values) = helper.completer.values.lock() {
-                        if let Some(v) = values.get(&line) {
-                            // print with colored output to highlight the parameter
-                            println!("You selected: {}", selected.green());
-                            println!("Value: {}", v.red());
-                            // Copy to clipboard
-                            if let Err(err) = cpboard.set_clipboard_content(v) {
-                                println!("Error copying to clipboard: {}", err);
-                            } else {
-                                println!("Copied to clipboard: {}", v);
+                        for key in values.keys() {
+                            if key.starts_with(&line) {
+                                paths.push(key.clone());
                             }
                         }
                     }
+
+                    // Print all values with paths we found
+                    if let Ok(values) = helper.completer.values.lock() {
+                        // we need a variable to store all of value and path as pair to write it into clipboard
+                        let mut clipboard_content = String::new();
+                        for path in paths {
+                            if let Some(value) = values.get(&path) {
+                                println!("Found value for {}: {}", path.green(), value.red());
+                                clipboard_content.push_str(&format!("{}: {}\n", path, value));
+                            }
+                        }
+                        // Write the clipboard content
+                        if let Err(err) = cpboard.set_clipboard_content(&clipboard_content) {
+                            println!("Error copying to clipboard: {}", err);
+                        } else {
+                            println!("Copied to clipboard:\n{}", clipboard_content);
+                        }
+                    }
+
+                    // if let Ok(values) = helper.completer.values.lock() {
+                    //     if let Some(v) = values.get(&line) {
+                    //         // print with colored output to highlight the parameter
+                    //         println!("You selected: {}", selected.green());
+                    //         println!("Value: {}", v.red());
+                    //         // Copy to clipboard
+                    //         if let Err(err) = cpboard.set_clipboard_content(v) {
+                    //             println!("Error copying to clipboard: {}", err);
+                    //         } else {
+                    //             println!("Copied to clipboard: {}", v);
+                    //         }
+                    //     }
+                    // }
                 }
             }
             Err(ReadlineError::Interrupted) => {
