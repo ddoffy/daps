@@ -11,7 +11,7 @@ use rustyline::{
     hint::{Hint, Hinter},
     validate::Validator,
 };
-use std::{borrow::Cow::{self, Borrowed, Owned}, path};
+use std::borrow::Cow::{self, Borrowed, Owned};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
@@ -1035,11 +1035,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(helper) = rl.helper_mut() {
                             // Extract the path from the command
                             let paths = line.replace("reload-by-paths", "");
-                            let paths = paths.trim();
+                            let mut paths = paths.trim();
 
                             if paths.is_empty() {
                                 println!("No paths provided for reload");
-                                continue;
+                                paths = &selected;
                             }
                             reload_by_paths(helper, paths).await?;
                         }
@@ -1049,11 +1049,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(helper) = rl.helper_mut() {
                             // Extract the path from the command
                             let path = line.replace("reload-by-path", "");
-                            let path = path.trim();
+                            let mut path = path.trim();
 
                             if path.is_empty() {
                                 println!("No path provided for reload");
-                                continue;
+                                path = &selected;
                             }
                             handle_command_result(reload_by_path(helper, path).await, &mut cpboard)
                                 .await;
