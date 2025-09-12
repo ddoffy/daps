@@ -1,6 +1,8 @@
 use crate::encryption::Encryption;
 use clipboard::{ClipboardContext, ClipboardProvider};
 use colored::Colorize;
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use rusoto_core::{Region, RusotoError};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
 use rustyline::{
@@ -1129,6 +1131,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(helper) = rl.helper_mut() {
                             let search_term = line.replace("search", "");
                             let search_term = search_term.trim();
+                            
+                            if search_term.is_empty() {
+                                println!("Please provide a search term. Usage: search <term>");
+                                continue;
+                            }
+                            
                             let parameters = match helper.completer.values.lock() {
                                 Ok(params) => params,
                                 Err(_) => {
@@ -1137,15 +1145,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             };
 
-                            let keys: Vec<_> = parameters
+                            // Create fuzzy matcher
+                            let matcher = SkimMatcherV2::default();
+                            
+                            // Get fuzzy matches with scores
+                            let mut matches: Vec<_> = parameters
                                 .keys()
-                                .filter(|k| k.to_lowercase().contains(&search_term))
+                                .filter_map(|k| {
+                                    matcher.fuzzy_match(k, search_term).map(|score| (k, score))
+                                })
+                                .collect();
+                            
+                            // Sort by score (higher is better)
+                            matches.sort_by(|a, b| b.1.cmp(&a.1));
+                            
+                            // Take top matches (limit to reasonable number)
+                            let keys: Vec<_> = matches.into_iter()
+                                .take(20)
+                                .map(|(key, _)| key)
                                 .collect();
 
                             if keys.is_empty() {
-                                println!("No matching parameters found");
+                                // Fallback to simple contains search if no fuzzy matches found
+                                let fallback_keys: Vec<_> = parameters
+                                    .keys()
+                                    .filter(|k| k.to_lowercase().contains(&search_term.to_lowercase()))
+                                    .collect();
+                                    
+                                if fallback_keys.is_empty() {
+                                    println!("No matching parameters found for '{}'", search_term);
+                                } else {
+                                    println!("Fuzzy search found no matches, showing contains matches for '{}':", search_term);
+                                    for (index, key) in fallback_keys.iter().enumerate() {
+                                        let default_value = "<unavailable>".to_string();
+                                        let value = parameters.get(*key).unwrap_or(&default_value);
+                                        println!(
+                                            "{}: {} -> {}",
+                                            index.to_string().yellow(),
+                                            key,
+                                            value.red()
+                                        );
+                                    }
+                                    // Store fallback results
+                                    if let Ok(mut search_result) = helper.completer.search_result.lock() {
+                                        *search_result = fallback_keys.iter().map(|k| k.to_string()).collect();
+                                    }
+                                }
                             } else {
-                                println!("Matching parameters:");
+                                println!("Fuzzy search results for '{}':", search_term);
                                 for (index, key) in keys.iter().enumerate() {
                                     let default_value = "<unavailable>".to_string();
                                     let value = parameters.get(*key).unwrap_or(&default_value);
@@ -1156,11 +1203,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         value.red()
                                     );
                                 }
-                            }
-
-                            // Store the search result in the shared state
-                            if let Ok(mut search_result) = helper.completer.search_result.lock() {
-                                *search_result = keys.iter().map(|k| k.to_string()).collect();
+                                // Store the search result in the shared state
+                                if let Ok(mut search_result) = helper.completer.search_result.lock() {
+                                    *search_result = keys.iter().map(|k| k.to_string()).collect();
+                                }
                             }
                         }
                         continue;
