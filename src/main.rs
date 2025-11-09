@@ -368,6 +368,7 @@ impl ParameterCompleter {
         paths_map.insert("search".to_string(), Vec::new());
         paths_map.insert("refresh".to_string(), Vec::new());
         paths_map.insert("reload".to_string(), Vec::new());
+        paths_map.insert("reloads".to_string(), Vec::new());
         paths_map.insert("reload-by-path".to_string(), Vec::new());
         paths_map.insert("reload-by-paths".to_string(), Vec::new());
         paths_map.insert("exit".to_string(), Vec::new());
@@ -967,6 +968,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "exit".to_string(),
             "refresh".to_string(),
             "reload".to_string(),
+            "reloads".to_string(),
             "set".to_string(),
             "select".to_string(),
             "sel".to_string(),
@@ -1025,11 +1027,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         continue;
                     }
-
                     "reload" => {
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(reload(helper, &selected).await, &mut cpboard)
                                 .await;
+                        }
+                        continue;
+                    }
+                    "select" => {
+                        // If selected is not empty, print its value
+                        if !selected.is_empty() {
+                            println!("Currently selected parameter: {}", selected.green());
+                        } else {
+                            // otherwise, prompt the user to select one
+                            println!("No parameter selected. Use 'sel <parameter>' to select one.");
+                        }
+                        continue;
+                    }
+                    "reloads" => {
+                        if let Some(helper) = rl.helper_mut() {
+                            // if selected is empty, prompt the user to select one
+                            // otherwise, reload by selected path
+                            let paths = if selected.is_empty() {
+                                println!("No parameter selected. Reloading all parameters.");
+                                ""
+                            } else {
+                                &selected
+                            };
+                            reload_by_paths(helper, paths).await?;
                         }
                         continue;
                     }
@@ -1131,12 +1156,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(helper) = rl.helper_mut() {
                             let search_term = line.replace("search", "");
                             let search_term = search_term.trim();
-                            
+
                             if search_term.is_empty() {
                                 println!("Please provide a search term. Usage: search <term>");
                                 continue;
                             }
-                            
+
                             let parameters = match helper.completer.values.lock() {
                                 Ok(params) => params,
                                 Err(_) => {
@@ -1147,7 +1172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Create fuzzy matcher
                             let matcher = SkimMatcherV2::default();
-                            
+
                             // Get fuzzy matches with scores
                             let mut matches: Vec<_> = parameters
                                 .keys()
@@ -1155,27 +1180,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     matcher.fuzzy_match(k, search_term).map(|score| (k, score))
                                 })
                                 .collect();
-                            
+
                             // Sort by score (higher is better)
                             matches.sort_by(|a, b| b.1.cmp(&a.1));
-                            
+
                             // Take top matches (limit to reasonable number)
-                            let keys: Vec<_> = matches.into_iter()
-                                .take(20)
-                                .map(|(key, _)| key)
-                                .collect();
+                            let keys: Vec<_> =
+                                matches.into_iter().take(20).map(|(key, _)| key).collect();
 
                             if keys.is_empty() {
                                 // Fallback to simple contains search if no fuzzy matches found
                                 let fallback_keys: Vec<_> = parameters
                                     .keys()
-                                    .filter(|k| k.to_lowercase().contains(&search_term.to_lowercase()))
+                                    .filter(|k| {
+                                        k.to_lowercase().contains(&search_term.to_lowercase())
+                                    })
                                     .collect();
-                                    
+
                                 if fallback_keys.is_empty() {
                                     println!("No matching parameters found for '{}'", search_term);
                                 } else {
-                                    println!("Fuzzy search found no matches, showing contains matches for '{}':", search_term);
+                                    println!(
+                                        "Fuzzy search found no matches, showing contains matches for '{}':",
+                                        search_term
+                                    );
                                     for (index, key) in fallback_keys.iter().enumerate() {
                                         let default_value = "<unavailable>".to_string();
                                         let value = parameters.get(*key).unwrap_or(&default_value);
@@ -1187,8 +1215,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         );
                                     }
                                     // Store fallback results
-                                    if let Ok(mut search_result) = helper.completer.search_result.lock() {
-                                        *search_result = fallback_keys.iter().map(|k| k.to_string()).collect();
+                                    if let Ok(mut search_result) =
+                                        helper.completer.search_result.lock()
+                                    {
+                                        *search_result =
+                                            fallback_keys.iter().map(|k| k.to_string()).collect();
                                     }
                                 }
                             } else {
@@ -1204,7 +1235,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     );
                                 }
                                 // Store the search result in the shared state
-                                if let Ok(mut search_result) = helper.completer.search_result.lock() {
+                                if let Ok(mut search_result) = helper.completer.search_result.lock()
+                                {
                                     *search_result = keys.iter().map(|k| k.to_string()).collect();
                                 }
                             }
@@ -1385,6 +1417,11 @@ async fn reload_by_paths(
     helper: &mut ParamStoreHelper,
     paths: &str,
 ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    // if paths is empty, return an error
+    if paths.is_empty() {
+        return Err("No paths provided for reload".into());
+    }
+
     println!("Reloading parameters by paths: {:?}", paths);
 
     let values = helper.completer.get_set_values(paths).await?;
