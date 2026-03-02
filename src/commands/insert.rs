@@ -1,0 +1,36 @@
+use crate::helper::ParamStoreHelper;
+
+/// Handles the `insert <path>:<value>:<type>` command.
+/// Creates a new parameter in AWS SSM and adds it to the local cache.
+pub async fn insert_value(
+    helper: &mut ParamStoreHelper,
+    line: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    println!("Inserting parameter: {}", line);
+    let path_and_value = line.replace("insert", "").trim_start().to_string();
+
+    // Format: /path/to/parameter:value:Type
+    let index = path_and_value.find(':').ok_or("Invalid format")?;
+    let last_index = path_and_value.rfind(':').ok_or("Invalid format")?;
+
+    let param_type = if last_index != index {
+        Some(path_and_value[last_index + 1..].to_string())
+    } else {
+        None
+    };
+
+    let path = &path_and_value[..index];
+    let value = &path_and_value[index + 1..last_index];
+
+    helper
+        .completer
+        .set_parameter(path, value.to_string(), param_type)
+        .await?;
+    helper
+        .completer
+        .update_all(path, value.to_string())
+        .await?;
+
+    println!("Inserted value: {}", value);
+    Ok(value.to_string())
+}
