@@ -5,19 +5,18 @@ use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
-use std::sync::{Arc, Mutex};
 
 pub struct ParameterCompleter {
-    pub parameters: Arc<Mutex<HashMap<String, Vec<String>>>>,
-    pub values: Arc<Mutex<HashMap<String, String>>>,
+    pub parameters: HashMap<String, Vec<String>>,
+    pub values: HashMap<String, String>,
     pub client: SsmClient,
     pub base_path: String,
     pub refresh: bool,
     pub store_dir: String,
     pub verbose: bool,
-    pub metadata: Arc<Mutex<HashMap<String, String>>>,
+    pub metadata: HashMap<String, String>,
     pub encryption: Encryption,
-    pub search_result: Arc<Mutex<Vec<String>>>,
+    pub search_result: Vec<String>,
 }
 
 impl ParameterCompleter {
@@ -44,25 +43,22 @@ impl ParameterCompleter {
         encryption: Encryption,
     ) -> Self {
         let client = SsmClient::new(region);
-        let parameters = Arc::new(Mutex::new(HashMap::new()));
-        let values = Arc::new(Mutex::new(HashMap::new()));
-        let metadata = Arc::new(Mutex::new(HashMap::new()));
 
         std::fs::create_dir_all(&store_dir).unwrap_or_else(|_| {
             println!("Failed to create directory: {}", store_dir);
         });
 
         Self {
-            parameters,
+            parameters: HashMap::new(),
             client,
             base_path,
-            values,
+            values: HashMap::new(),
             refresh,
             store_dir,
             verbose,
-            metadata,
+            metadata: HashMap::new(),
             encryption,
-            search_result: Arc::new(Mutex::new(Vec::new())),
+            search_result: Vec::new(),
         }
     }
 
@@ -91,21 +87,15 @@ impl ParameterCompleter {
     }
 
     pub async fn update_all(
-        &self,
+        &mut self,
         path: &str,
         value: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut parameters = self.parameters.lock().unwrap();
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|e| format!("Failed to lock values: {}", e))?;
-
         self.log(format!("Updating parameter: {}", path).as_str());
         self.log(format!("New value: {}", value).as_str());
 
-        self.process_parameter_path(path, &mut parameters);
-        values.insert(path.to_string(), value.to_string());
+        Self::process_parameter_path(path, &mut self.parameters);
+        self.values.insert(path.to_string(), value.to_string());
 
         let base_path = self.get_sanitized_base_path();
         let file_path = self.get_file_path(&base_path, "values");
@@ -121,14 +111,16 @@ impl ParameterCompleter {
             .open(file_path)?
             .write_all(new_line.as_bytes())?;
 
-        self.write_parameters_to_file(base_path.as_str(), parameters.clone())?;
+        let params_clone = self.parameters.clone();
+        let base_path_str = self.get_sanitized_base_path();
+        self.write_parameters_to_file(base_path_str.as_str(), params_clone)?;
 
         self.log("Updated all parameters and values");
         Ok(())
     }
 
     pub async fn change_value(
-        &self,
+        &mut self,
         path: &str,
         value: String,
     ) -> Result<String, Box<dyn std::error::Error>> {
@@ -148,11 +140,7 @@ impl ParameterCompleter {
 
         self.log(format!("Setting parameter: {}", path).as_str());
 
-        let mut values = self
-            .values
-            .lock()
-            .map_err(|e| format!("Failed to lock values: {}", e))?;
-        values.insert(path.to_string(), value.clone());
+        self.values.insert(path.to_string(), value.clone());
 
         let base_path = self.get_sanitized_base_path();
         let file_path = self.get_file_path(&base_path, "values");
@@ -169,7 +157,7 @@ impl ParameterCompleter {
     }
 
     pub async fn get_set_values(
-        &self,
+        &mut self,
         paths: &str,
     ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
         let mut results = HashMap::new();
@@ -220,7 +208,7 @@ impl ParameterCompleter {
     }
 
     pub async fn get_set_value(
-        &self,
+        &mut self,
         path: &str,
     ) -> Result<String, RusotoError<rusoto_ssm::GetParameterError>> {
         self.log(format!("Fetching parameter: {}", path).as_str());
@@ -236,16 +224,11 @@ impl ParameterCompleter {
 
         if let Some(param) = result.parameter {
             if let Some(value) = param.value {
-                {
-                    let mut values = self.values.lock().unwrap();
-                    values.insert(path.to_string(), value.clone());
-                }
+                self.values.insert(path.to_string(), value.clone());
 
                 let base_path = self.get_sanitized_base_path();
                 let values_file_path = self.get_file_path(&base_path, "values");
-                let parameters = self.parameters.lock().unwrap();
-                let path_exists = parameters.contains_key(path);
-                drop(parameters);
+                let path_exists = self.parameters.contains_key(path);
 
                 let encrypted_value = self.encryption.encrypt_value(&value);
 
@@ -290,13 +273,10 @@ impl ParameterCompleter {
     }
 
     pub async fn load_parameters(
-        &self,
+        &mut self,
     ) -> Result<(), RusotoError<rusoto_ssm::GetParametersByPathError>> {
-        let mut parameters = self.parameters.lock().expect("Failed to lock parameters");
-        parameters.clear();
-
-        let mut values = self.values.lock().expect("Failed to lock values");
-        values.clear();
+        self.parameters.clear();
+        self.values.clear();
 
         let mut paths_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut values_d: HashMap<String, String> = HashMap::new();
@@ -335,8 +315,8 @@ impl ParameterCompleter {
                     .as_str(),
                 );
 
-                *parameters = paths_map;
-                *values = values_d;
+                self.parameters = paths_map;
+                self.values = values_d;
                 return Ok(());
             }
         }
@@ -375,7 +355,7 @@ impl ParameterCompleter {
             if let Some(params) = &result.parameters {
                 for param in params {
                     if let Some(name) = &param.name {
-                        self.process_parameter_path(name, &mut paths_map);
+                        Self::process_parameter_path(name, &mut paths_map);
                         if let Some(value) = &param.value {
                             values_d.insert(name.clone(), value.clone());
                         }
@@ -389,8 +369,8 @@ impl ParameterCompleter {
             }
         }
 
-        *parameters = paths_map.clone();
-        *values = values_d.clone();
+        self.parameters = paths_map.clone();
+        self.values = values_d.clone();
 
         let base_path = self.base_path.replace('/', "_");
 
@@ -398,7 +378,7 @@ impl ParameterCompleter {
         self.write_parameters_to_file(base_path.as_str(), paths_map)?;
         self.write_values_to_file(base_path.as_str(), values_d)?;
 
-        self.log(format!("Loaded {} parameter paths", parameters.len()).as_str());
+        self.log(format!("Loaded {} parameter paths", self.parameters.len()).as_str());
         Ok(())
     }
 
@@ -459,7 +439,7 @@ impl ParameterCompleter {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() == 2 {
                     let path = parts[0].trim();
-                    self.process_parameter_path(path, paths_map);
+                    Self::process_parameter_path(path, paths_map);
                 }
             }
         }
@@ -550,7 +530,6 @@ impl ParameterCompleter {
     }
 
     pub fn process_parameter_path(
-        &self,
         full_path: &str,
         paths_map: &mut HashMap<String, Vec<String>>,
     ) {
@@ -580,36 +559,19 @@ impl ParameterCompleter {
     }
 
     pub fn get_completions(&self, path: &str) -> Vec<String> {
-        let Ok(parameters) = self.parameters.lock() else {
-            return Vec::new();
-        };
-        let Ok(metadata) = self.metadata.lock() else {
-            return Vec::new();
-        };
-
         if path.to_lowercase().starts_with("set") {
-            let Ok(values) = self.values.lock() else {
-                return Vec::new();
-            };
-            let selected = metadata
-                .get("selected")
-                .unwrap_or(&"".to_string())
-                .to_string();
-            let val = values.get(&selected).unwrap_or(&"".to_string()).to_string();
+            let selected = self.metadata.get("selected").map(|s| s.as_str()).unwrap_or("");
+            let val = self.values.get(selected).map(|s| s.as_str()).unwrap_or("");
             return vec![format!("set {}", val)];
         }
 
         if path.to_lowercase().starts_with("insert") {
-            let Ok(values) = self.values.lock() else {
-                return Vec::new();
-            };
-            let selected = metadata
-                .get("selected")
-                .unwrap_or(&"".to_string())
-                .to_string();
-            let val = values.get(&selected).unwrap_or(&"".to_string()).to_string();
+            let selected = self.metadata.get("selected").map(|s| s.as_str()).unwrap_or("");
+            let val = self.values.get(selected).map(|s| s.as_str()).unwrap_or("");
             return vec![format!("insert {}:{}:{}", selected, val, "String")];
         }
+
+        let parameters = &self.parameters;
 
         let lookup_path = if path.is_empty() || !path.contains('/') {
             "/".to_string()

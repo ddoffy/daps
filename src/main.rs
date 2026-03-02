@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{}/{}", home_dir, opt.store_dir)
     };
 
-    let completer = ParameterCompleter::new(
+    let mut completer = ParameterCompleter::new(
         region,
         base_path,
         opt.refresh,

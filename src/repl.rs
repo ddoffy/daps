@@ -157,12 +157,7 @@ pub async fn run(
                         if selected.is_empty() {
                             println!("No parameter selected. Use 'sel <index>' or navigate to a key first.");
                         } else if let Some(helper) = rl.helper() {
-                            let value = helper
-                                .completer
-                                .values
-                                .lock()
-                                .ok()
-                                .and_then(|v| v.get(&selected).cloned());
+                            let value = helper.completer.values.get(&selected).cloned();
                             match value {
                                 Some(conn_str) => parse_db(&selected, &conn_str, &mut cpboard),
                                 None => println!("No cached value for '{}'. Try 'reload' first.", selected),
@@ -174,42 +169,38 @@ pub async fn run(
                         rl.add_history_entry(&path);
                         selected = path.clone();
 
-                        if let Some(helper) = rl.helper() {
-                            if let Ok(mut metadata) = helper.completer.metadata.lock() {
-                                metadata.insert("selected".to_string(), selected.clone());
-                            }
-                        }
+                        if let Some(helper) = rl.helper_mut() {
+                            helper
+                                .completer
+                                .metadata
+                                .insert("selected".to_string(), selected.clone());
 
-                        if let Some(helper) = rl.helper() {
-                            let mut matching_paths = Vec::new();
-                            if let Ok(values) = helper.completer.values.lock() {
-                                for key in values.keys() {
-                                    if key.starts_with(&path) {
-                                        matching_paths.push(key.clone());
-                                    }
+                            let matching_paths: Vec<String> = helper
+                                .completer
+                                .values
+                                .keys()
+                                .filter(|k| k.starts_with(&path))
+                                .cloned()
+                                .collect();
+
+                            let mut clipboard_content = String::new();
+                            for p in matching_paths {
+                                if let Some(value) = helper.completer.values.get(&p) {
+                                    println!(
+                                        "Found value for {}: {}",
+                                        p.green(),
+                                        value.red()
+                                    );
+                                    clipboard_content
+                                        .push_str(&format!("{}: {}\n", p, value));
                                 }
                             }
-
-                            if let Ok(values) = helper.completer.values.lock() {
-                                let mut clipboard_content = String::new();
-                                for p in matching_paths {
-                                    if let Some(value) = values.get(&p) {
-                                        println!(
-                                            "Found value for {}: {}",
-                                            p.green(),
-                                            value.red()
-                                        );
-                                        clipboard_content
-                                            .push_str(&format!("{}: {}\n", p, value));
-                                    }
-                                }
-                                if let Err(err) =
-                                    cpboard.set_clipboard_content(&clipboard_content)
-                                {
-                                    println!("Error copying to clipboard: {}", err);
-                                } else {
-                                    println!("Copied to clipboard:\n{}", clipboard_content);
-                                }
+                            if let Err(err) =
+                                cpboard.set_clipboard_content(&clipboard_content)
+                            {
+                                println!("Error copying to clipboard: {}", err);
+                            } else {
+                                println!("Copied to clipboard:\n{}", clipboard_content);
                             }
                         }
                     }

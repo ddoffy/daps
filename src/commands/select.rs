@@ -15,12 +15,7 @@ pub fn select_by_index(
         .parse::<usize>()
         .map_err(|_| "Argument must be a numeric index from search results")?;
 
-    let search_result = helper
-        .completer
-        .search_result
-        .lock()
-        .map_err(|_| "Failed to access search results")?
-        .clone();
+    let search_result = helper.completer.search_result.clone();
 
     if index >= search_result.len() {
         return Err("Invalid index selected".into());
@@ -28,9 +23,10 @@ pub fn select_by_index(
 
     let selected_param = search_result[index].clone();
 
-    if let Ok(mut metadata) = helper.completer.metadata.lock() {
-        metadata.insert("selected".to_string(), selected_param.clone());
-    }
+    helper
+        .completer
+        .metadata
+        .insert("selected".to_string(), selected_param.clone());
 
     println!("Selected parameter: {}", selected_param.green());
     Ok(selected_param)
