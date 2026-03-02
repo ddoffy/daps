@@ -94,26 +94,27 @@ impl ParameterCompleter {
         self.log(format!("Updating parameter: {}", path).as_str());
         self.log(format!("New value: {}", value).as_str());
 
-        Self::process_parameter_path(path, &mut self.parameters);
-        self.values.insert(path.to_string(), value.to_string());
-
         let base_path = self.get_sanitized_base_path();
-        let file_path = self.get_file_path(&base_path, "values");
+        let values_file = self.get_file_path(&base_path, "values");
 
-        self.log(format!("Writing value to file: {}", file_path).as_str());
-
+        // Encrypt before moving value into the map
         let encrypted_value = self.encryption.encrypt_value(&value);
         let new_line = format!("{}: {}\n", path, encrypted_value);
+
+        Self::process_parameter_path(path, &mut self.parameters);
+        // Move value — no clone needed
+        self.values.insert(path.to_string(), value);
+
+        self.log(format!("Writing value to file: {}", values_file).as_str());
 
         fs::OpenOptions::new()
             .append(true)
             .create(true)
-            .open(file_path)?
+            .open(values_file)?
             .write_all(new_line.as_bytes())?;
 
-        let params_clone = self.parameters.clone();
-        let base_path_str = self.get_sanitized_base_path();
-        self.write_parameters_to_file(base_path_str.as_str(), params_clone)?;
+        // Pass by reference — no HashMap clone
+        self.write_parameters_to_file(&base_path, &self.parameters)?;
 
         self.log("Updated all parameters and values");
         Ok(())
@@ -160,8 +161,6 @@ impl ParameterCompleter {
         &mut self,
         paths: &str,
     ) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
-        let mut results = HashMap::new();
-
         let mut request = GetParametersByPathRequest {
             path: paths.to_string(),
             recursive: Some(true),
@@ -170,32 +169,33 @@ impl ParameterCompleter {
         };
 
         self.log(format!("Fetching parameters from path: {}", paths).as_str());
-        let result = self.client.get_parameters_by_path(request.clone()).await?;
 
-        if result.parameters.is_none() {
-            self.log("No parameters found in the specified path");
-            return Ok(results);
-        }
+        // Collect all pages first so we hold no borrow across the &mut self calls below
+        let mut raw: Vec<(String, String)> = Vec::new();
+        loop {
+            let result = self.client.get_parameters_by_path(request.clone()).await?;
+            let next_token = result.next_token;
 
-        let mut result_parameters = result.parameters.unwrap();
-        let mut next_token = result.next_token;
-
-        while let Some(token) = next_token {
-            request.next_token = Some(token);
-            let next_result = self.client.get_parameters_by_path(request.clone()).await?;
-            if let Some(params) = next_result.parameters {
-                result_parameters.extend(params);
-            }
-            next_token = next_result.next_token;
-        }
-
-        for param in result_parameters {
-            if let Some(name) = param.name {
-                if let Some(value) = param.value {
-                    results.insert(name.clone(), value.clone());
-                    self.update_all(name.as_str(), value).await?;
+            if let Some(params) = result.parameters {
+                for param in params {
+                    if let (Some(name), Some(value)) = (param.name, param.value) {
+                        raw.push((name, value));
+                    }
                 }
             }
+
+            match next_token {
+                Some(token) => request.next_token = Some(token),
+                None => break,
+            }
+        }
+
+        // Process: update local cache then build the results map.
+        // Value is cloned once for update_all; name is moved into results.
+        let mut results = HashMap::with_capacity(raw.len());
+        for (name, value) in raw {
+            self.update_all(&name, value.clone()).await?;
+            results.insert(name, value);
         }
 
         self.log(format!("Fetched {} parameters", results.len()).as_str());
@@ -352,13 +352,12 @@ impl ParameterCompleter {
             total += len;
             self.log(format!("Total parameters fetched: {}", total).as_str());
 
-            if let Some(params) = &result.parameters {
+            // Consume params so name/value are owned Strings — no clone needed
+            if let Some(params) = result.parameters {
                 for param in params {
-                    if let Some(name) = &param.name {
-                        Self::process_parameter_path(name, &mut paths_map);
-                        if let Some(value) = &param.value {
-                            values_d.insert(name.clone(), value.clone());
-                        }
+                    if let (Some(name), Some(value)) = (param.name, param.value) {
+                        Self::process_parameter_path(&name, &mut paths_map);
+                        values_d.insert(name, value);
                     }
                 }
             }
@@ -369,14 +368,15 @@ impl ParameterCompleter {
             }
         }
 
-        self.parameters = paths_map.clone();
-        self.values = values_d.clone();
+        // Move into self first, then write from self — no clone
+        self.parameters = paths_map;
+        self.values = values_d;
 
         let base_path = self.base_path.replace('/', "_");
 
         self.log("Writing parameters and values to file...");
-        self.write_parameters_to_file(base_path.as_str(), paths_map)?;
-        self.write_values_to_file(base_path.as_str(), values_d)?;
+        self.write_parameters_to_file(&base_path, &self.parameters)?;
+        self.write_values_to_file(&base_path, &self.values)?;
 
         self.log(format!("Loaded {} parameter paths", self.parameters.len()).as_str());
         Ok(())
@@ -481,7 +481,7 @@ impl ParameterCompleter {
     pub fn write_values_to_file(
         &self,
         base_path: &str,
-        values: HashMap<String, String>,
+        values: &HashMap<String, String>,
     ) -> io::Result<()> {
         self.log("Writing values to file...");
         self.log(format!("Len of values: {}", values.len()).as_str());
@@ -508,7 +508,7 @@ impl ParameterCompleter {
     pub fn write_parameters_to_file(
         &self,
         base_path: &str,
-        parameters: HashMap<String, Vec<String>>,
+        parameters: &HashMap<String, Vec<String>>,
     ) -> io::Result<()> {
         self.log("Writing parameters to file...");
         self.log(format!("Len of parameters: {}", parameters.len()).as_str());
