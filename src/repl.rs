@@ -5,6 +5,7 @@ use crate::commands::migration::migration;
 use crate::commands::refresh::refresh;
 use crate::commands::reload::{reload, reload_by_path};
 use crate::commands::reload_by_paths::reload_by_paths;
+use crate::commands::parse_db::parse_db;
 use crate::commands::search::search;
 use crate::commands::select::select_by_index;
 use crate::commands::set::set_value;
@@ -149,6 +150,23 @@ pub async fn run(
                             println!("Please provide a search term. Usage: search <term>");
                         } else if let Some(helper) = rl.helper_mut() {
                             search(helper, &term);
+                        }
+                    }
+
+                    Command::ParseDb => {
+                        if selected.is_empty() {
+                            println!("No parameter selected. Use 'sel <index>' or navigate to a key first.");
+                        } else if let Some(helper) = rl.helper() {
+                            let value = helper
+                                .completer
+                                .values
+                                .lock()
+                                .ok()
+                                .and_then(|v| v.get(&selected).cloned());
+                            match value {
+                                Some(conn_str) => parse_db(&selected, &conn_str, &mut cpboard),
+                                None => println!("No cached value for '{}'. Try 'reload' first.", selected),
+                            }
                         }
                     }
 

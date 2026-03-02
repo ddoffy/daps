@@ -1,5 +1,6 @@
 pub mod insert;
 pub mod migration;
+pub mod parse_db;
 pub mod refresh;
 pub mod reload;
 pub mod reload_by_paths;

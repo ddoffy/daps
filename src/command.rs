@@ -23,6 +23,8 @@ pub enum Command {
     Insert(String),
     /// `search <term>` — fuzzy-searches cached parameter keys.
     Search(String),
+    /// `parse-db` — parses the selected parameter's value as a Postgres connection string.
+    ParseDb,
     /// Anything else is treated as a path to navigate / display.
     Navigate(String),
 }
@@ -52,6 +54,7 @@ impl Command {
             "sel" => Command::SelectByIndex(rest.to_string()),
             "insert" => Command::Insert(rest.to_string()),
             "search" => Command::Search(rest.to_string()),
+            "parse-db" => Command::ParseDb,
             _ => Command::Navigate(line.to_string()),
         }
     }
@@ -71,6 +74,7 @@ impl Command {
             "insert",
             "search",
             "migration",
+            "parse-db",
         ]
         .into_iter()
         .map(String::from)
