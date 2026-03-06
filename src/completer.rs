@@ -571,6 +571,12 @@ impl ParameterCompleter {
             return vec![format!("insert {}:{}:{}", selected, val, "String")];
         }
 
+        // Only complete paths when input starts with '/'; command completions
+        // are handled separately by the helper's cmd_candidates.
+        if !path.starts_with('/') {
+            return Vec::new();
+        }
+
         let parameters = &self.parameters;
 
         let lookup_path = if path.is_empty() || !path.contains('/') {
