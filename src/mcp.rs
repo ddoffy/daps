@@ -110,6 +110,17 @@ fn tool_definitions() -> Value {
                     },
                     "required": ["term"]
                 }
+            },
+            {
+                "name": "refresh_parameters",
+                "description": "Re-fetch all parameters under a path prefix from AWS SSM and update the local cache",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path prefix to refresh, e.g. /prod/ (defaults to base path)" }
+                    },
+                    "required": []
+                }
             }
         ]
     })
@@ -178,6 +189,16 @@ async fn call_tool(
             matches.sort_by(|a, b| b.0.cmp(&a.0));
             let keys: Vec<&str> = matches.iter().map(|(_, k)| *k).collect();
             Ok(json!({ "results": keys }))
+        }
+
+        "refresh_parameters" => {
+            let base = completer.base_path.clone();
+            let path = args["path"].as_str().unwrap_or(&base).to_string();
+            let results = completer
+                .get_set_values(&path)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "refreshed": results.len(), "path": path }))
         }
 
         other => Err(format!("Unknown tool: {other}")),
