@@ -17,6 +17,7 @@ pub mod completer;
 pub mod cpboard;
 pub mod encryption;
 pub mod helper;
+pub mod mcp;
 pub mod repl;
 pub mod utils;
 
@@ -46,6 +47,10 @@ struct Opt {
     /// Verbose output
     #[structopt(long)]
     verbose: bool,
+
+    /// Run as an MCP (Model Context Protocol) server over stdio
+    #[structopt(long)]
+    mcp: bool,
 }
 
 #[tokio::main]
@@ -97,6 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     completer.load_parameters().await?;
 
+    // ── MCP server mode ────────────────────────────────────────────────────
+    if opt.mcp {
+        return mcp::run(&mut completer).await;
+    }
+
+    // ── Interactive REPL mode ──────────────────────────────────────────────
     let config = Config::builder()
         .edit_mode(EditMode::Vi)
         .completion_type(CompletionType::Circular)
