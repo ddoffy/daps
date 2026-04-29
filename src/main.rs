@@ -1,3 +1,4 @@
+use crate::cli::Subcommand;
 use crate::command::Command;
 use crate::completer::ParameterCompleter;
 use crate::encryption::Encryption;
@@ -11,6 +12,7 @@ use rustyline::{
 };
 use structopt::StructOpt;
 
+pub mod cli;
 pub mod command;
 pub mod commands;
 pub mod completer;
@@ -24,7 +26,7 @@ pub mod utils;
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "daps",
-    about = "D. AWS Parameter Store CLI with tab completion",
+    about = "D. AWS Parameter Store CLI",
     author = "D. Doffy <cuongnsm@gmail.com>"
 )]
 struct Opt {
@@ -36,7 +38,7 @@ struct Opt {
     #[structopt(short, long, default_value = "/")]
     path: String,
 
-    /// Refresh parameter cache
+    /// Refresh parameter cache on startup
     #[structopt(short, long)]
     refresh: bool,
 
@@ -48,15 +50,16 @@ struct Opt {
     #[structopt(long)]
     verbose: bool,
 
-    /// Run as an MCP (Model Context Protocol) server over stdio
-    #[structopt(long)]
-    mcp: bool,
+    #[structopt(subcommand)]
+    cmd: Option<Subcommand>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encryption_key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        println!("DAPS_ENCRYPTION_KEY not set, using default");
+        if std::env::var("DAPS_QUIET").is_err() {
+            eprintln!("DAPS_ENCRYPTION_KEY not set, using default");
+        }
         "default_key".to_string()
     });
 
@@ -69,16 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     #[cfg(not(target_os = "windows"))]
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| {
-        println!("HOME not set, using current directory");
-        ".".to_string()
-    });
-
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     #[cfg(target_os = "windows")]
-    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| {
-        println!("APPDATA not set, using current directory");
-        ".".to_string()
-    });
+    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
 
     let is_absolute = if cfg!(target_os = "windows") {
         opt.store_dir.chars().nth(1) == Some(':')
@@ -92,6 +88,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{}/{}", home_dir, opt.store_dir)
     };
 
+    // ── MCP server shorthand: `daps mcp` subcommand ────────────────────────
+    if matches!(opt.cmd, Some(Subcommand::Mcp)) {
+        let mut completer = ParameterCompleter::new(
+            region,
+            base_path,
+            opt.refresh,
+            store_dir,
+            opt.verbose,
+            Encryption::new(true, encryption_key),
+        );
+        completer.load_parameters().await?;
+        return mcp::run(&mut completer).await;
+    }
+
+    // ── Non-interactive CLI subcommands ────────────────────────────────────
+    if let Some(sub) = opt.cmd {
+        return cli::run(sub, region, base_path, opt.refresh, store_dir, opt.verbose, encryption_key).await;
+    }
+
+    // ── Interactive REPL mode (default when no subcommand given) ───────────
     let mut completer = ParameterCompleter::new(
         region,
         base_path,
@@ -102,12 +118,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     completer.load_parameters().await?;
 
-    // ── MCP server mode ────────────────────────────────────────────────────
-    if opt.mcp {
-        return mcp::run(&mut completer).await;
-    }
-
-    // ── Interactive REPL mode ──────────────────────────────────────────────
     let config = Config::builder()
         .edit_mode(EditMode::Vi)
         .completion_type(CompletionType::Circular)

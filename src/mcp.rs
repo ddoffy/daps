@@ -3,9 +3,43 @@
 /// Runs a JSON-RPC 2.0 server over stdio, exposing AWS SSM Parameter Store
 /// operations as MCP tools for AI assistants.
 use crate::completer::ParameterCompleter;
+use rusoto_core::RusotoError;
+use rusoto_ssm::GetParameterError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
+
+/// Convert a RusotoError<GetParameterError> into a human-readable message.
+/// The upstream rusoto types use the AWS-supplied message verbatim, which is
+/// frequently empty (e.g. ParameterNotFound), producing cryptic MCP errors.
+fn fmt_get_param_err(path: &str, err: RusotoError<GetParameterError>) -> String {
+    match &err {
+        RusotoError::Service(GetParameterError::ParameterNotFound(msg)) => {
+            if msg.is_empty() {
+                format!("Parameter not found: {path}")
+            } else {
+                format!("Parameter not found ({path}): {msg}")
+            }
+        }
+        RusotoError::Service(GetParameterError::InternalServerError(msg)) => {
+            format!("SSM internal server error for {path}: {msg}")
+        }
+        RusotoError::Service(GetParameterError::InvalidKeyId(msg)) => {
+            format!("Invalid KMS key id for {path}: {msg}")
+        }
+        RusotoError::Service(GetParameterError::ParameterVersionNotFound(msg)) => {
+            format!("Parameter version not found for {path}: {msg}")
+        }
+        other => {
+            let s = other.to_string();
+            if s.is_empty() {
+                format!("Failed to fetch parameter {path}: {other:?}")
+            } else {
+                format!("Failed to fetch parameter {path}: {s}")
+            }
+        }
+    }
+}
 
 // ── JSON-RPC 2.0 wire types ──────────────────────────────────────────────────
 
@@ -128,6 +162,16 @@ fn tool_definitions() -> Value {
 
 // ── Tool dispatch ─────────────────────────────────────────────────────────────
 
+/// Stringify any error, falling back to Debug when Display is empty.
+fn fmt_any_err<E: std::fmt::Display + std::fmt::Debug>(ctx: &str, e: E) -> String {
+    let s = e.to_string();
+    if s.is_empty() {
+        format!("{ctx}: {e:?}")
+    } else {
+        format!("{ctx}: {s}")
+    }
+}
+
 async fn call_tool(
     name: &str,
     args: &Value,
@@ -139,7 +183,7 @@ async fn call_tool(
             let value = completer
                 .get_set_value(path)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| fmt_get_param_err(path, e))?;
             Ok(json!({ "path": path, "value": value }))
         }
 
@@ -160,7 +204,7 @@ async fn call_tool(
             completer
                 .change_value(path, value.to_string())
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| fmt_any_err(&format!("set_parameter {path}"), e))?;
             Ok(json!({ "success": true, "path": path }))
         }
 
@@ -171,8 +215,11 @@ async fn call_tool(
             completer
                 .set_parameter(path, value.to_string(), Some(param_type.to_string()))
                 .await
-                .map_err(|e| e.to_string())?;
-            completer.update_all(path, value.to_string()).await.map_err(|e| e.to_string())?;
+                .map_err(|e| fmt_any_err(&format!("insert_parameter {path}"), e))?;
+            completer
+                .update_all(path, value.to_string())
+                .await
+                .map_err(|e| fmt_any_err(&format!("insert_parameter {path} (cache)"), e))?;
             Ok(json!({ "success": true, "path": path }))
         }
 
@@ -197,7 +244,7 @@ async fn call_tool(
             let results = completer
                 .get_set_values(&path)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| fmt_any_err(&format!("refresh_parameters {path}"), e))?;
             Ok(json!({ "refreshed": results.len(), "path": path }))
         }
 
