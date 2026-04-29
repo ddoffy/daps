@@ -56,14 +56,14 @@ struct Opt {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let opt = Opt::from_args();
+
     let encryption_key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        if std::env::var("DAPS_QUIET").is_err() {
+        if opt.verbose {
             eprintln!("DAPS_ENCRYPTION_KEY not set, using default");
         }
         "default_key".to_string()
     });
-
-    let opt = Opt::from_args();
     let region = parse_region(&opt.region).map_err(|e| format!("Invalid region: {}", e))?;
     let base_path = opt.path.clone();
 

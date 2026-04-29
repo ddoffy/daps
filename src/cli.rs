@@ -148,7 +148,8 @@ pub async fn run(
             let mut helper = make_helper(
                 region, base_path, refresh_cache, store_dir, verbose, encryption_key, false,
             ).await?;
-            let value = reload(&mut helper, &path).await?;
+            let value = helper.completer.get_set_value(&path).await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             println!("{}", value);
         }
 
