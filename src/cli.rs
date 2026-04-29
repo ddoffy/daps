@@ -23,6 +23,15 @@ pub enum Subcommand {
         path: String,
     },
 
+    /// Get all parameter values under a path prefix from AWS SSM (tab-separated key\tvalue lines)
+    Gets {
+        /// Path prefix (e.g. /prod/)
+        path: String,
+        /// Output keys only (one per line)
+        #[structopt(long)]
+        keys_only: bool,
+    },
+
     /// Set a parameter value in AWS SSM
     ///
     /// The value can be piped from stdin: echo "newval" | daps set /prod/key
@@ -141,6 +150,23 @@ pub async fn run(
             ).await?;
             let value = reload(&mut helper, &path).await?;
             println!("{}", value);
+        }
+
+        // ── gets ───────────────────────────────────────────────────────────
+        Subcommand::Gets { path, keys_only } => {
+            let mut helper = make_helper(
+                region, base_path, refresh_cache, store_dir, verbose, encryption_key, false,
+            ).await?;
+            let values = helper.completer.get_set_values(&path).await?;
+            let mut pairs: Vec<_> = values.into_iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            for (key, value) in &pairs {
+                if keys_only {
+                    println!("{}", key);
+                } else {
+                    println!("{}\t{}", key, value);
+                }
+            }
         }
 
         // ── set ────────────────────────────────────────────────────────────
