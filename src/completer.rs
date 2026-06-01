@@ -279,6 +279,10 @@ impl ParameterCompleter {
         paths_map.insert("reload-by-path".to_string(), Vec::new());
         paths_map.insert("reload-by-paths".to_string(), Vec::new());
         paths_map.insert("exit".to_string(), Vec::new());
+        paths_map.insert("secret-get".to_string(), Vec::new());
+        paths_map.insert("secret-set".to_string(), Vec::new());
+        paths_map.insert("secret-create".to_string(), Vec::new());
+        paths_map.insert("secret-list".to_string(), Vec::new());
     }
 
     pub async fn load_parameters(
@@ -313,7 +317,7 @@ impl ParameterCompleter {
                 is_values_loaded = true;
             }
 
-            // Merge all other parameter/value caches from the store directory so
+            // Merge all other parameter/value/secret caches from the store directory so
             // that the completion tree is always complete regardless of which
             // base path was used when each cache was built.
             if let Ok(entries) = std::fs::read_dir(&self.store_dir) {
@@ -339,6 +343,9 @@ impl ParameterCompleter {
                     }
                 }
             }
+
+            // Always load secrets cache so secret names are available for tab completion.
+            self.load_secrets_from_cache();
 
             if is_parameters_loaded && is_values_loaded {
                 self.log("Parameters and values loaded from file");
@@ -415,6 +422,7 @@ impl ParameterCompleter {
         self.write_values_to_file(&base_path, &self.values)?;
 
         self.log(format!("Loaded {} parameter paths", self.parameters.len()).as_str());
+        self.load_secrets_from_cache();
         Ok(())
     }
 
@@ -605,6 +613,35 @@ impl ParameterCompleter {
             let selected = self.metadata.get("selected").map(|s| s.as_str()).unwrap_or("");
             let val = self.values.get(selected).map(|s| s.as_str()).unwrap_or("");
             return vec![format!("insert {}:{}:{}", selected, val, "String")];
+        }
+
+        // `secret-get <partial>` / `secret-set <partial>` → complete from cached secret names.
+        let lower = path.to_lowercase();
+        if lower.starts_with("secret-get ") || lower.starts_with("secret-set ") {
+            let cmd_end = path.find(' ').unwrap_or(path.len());
+            let cmd = &path[..cmd_end];
+            let partial = path[cmd_end + 1..].trim().to_lowercase();
+            let mut matches: Vec<String> = self
+                .secrets
+                .keys()
+                .filter(|name| name.to_lowercase().starts_with(&partial))
+                .map(|name| format!("{} {}", cmd, name))
+                .collect();
+            matches.sort();
+            return matches;
+        }
+
+        // `secret-list <partial>` → suggest cached secret names as filter substrings.
+        if lower.starts_with("secret-list ") {
+            let partial = path["secret-list ".len()..].trim().to_lowercase();
+            let mut matches: Vec<String> = self
+                .secrets
+                .keys()
+                .filter(|name| name.to_lowercase().contains(&partial))
+                .map(|name| format!("secret-list {}", name))
+                .collect();
+            matches.sort();
+            return matches;
         }
 
         if !path.starts_with('/') {
