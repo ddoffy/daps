@@ -5,6 +5,10 @@ pub mod refresh;
 pub mod reload;
 pub mod reload_by_paths;
 pub mod search;
+pub mod secret_create;
+pub mod secret_get;
+pub mod secret_list;
+pub mod secret_set;
 pub mod select;
 pub mod set;
 

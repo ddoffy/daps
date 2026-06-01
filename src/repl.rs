@@ -7,6 +7,10 @@ use crate::commands::reload::{reload, reload_by_path};
 use crate::commands::reload_by_paths::reload_by_paths;
 use crate::commands::parse_db::parse_db;
 use crate::commands::search::search;
+use crate::commands::secret_create::secret_create;
+use crate::commands::secret_get::secret_get;
+use crate::commands::secret_list::secret_list;
+use crate::commands::secret_set::secret_set;
 use crate::commands::select::select_by_index;
 use crate::commands::set::set_value;
 use crate::helper::ParamStoreHelper;
@@ -163,11 +167,46 @@ pub async fn run(
                         if selected.is_empty() {
                             println!("No parameter selected. Use 'sel <index>' or navigate to a key first.");
                         } else if let Some(helper) = rl.helper() {
-                            let value = helper.completer.values.get(&selected).cloned();
+                            let value = helper.completer.values.get(&selected)
+                                .or_else(|| helper.completer.secrets.get(&selected))
+                                .cloned();
                             match value {
                                 Some(conn_str) => parse_db(&selected, &conn_str),
                                 None => println!("No cached value for '{}'. Try 'reload' first.", selected),
                             }
+                        }
+                    }
+
+                    Command::SecretGet(name) => {
+                        if name.is_empty() {
+                            println!("Usage: secret-get <name>");
+                        } else if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(secret_get(helper, &name).await).await;
+                        }
+                    }
+
+                    Command::SecretSet(value) => {
+                        if value.is_empty() {
+                            println!("Usage: secret-set <value>  (select a secret first with 'sel')");
+                        } else if selected.is_empty() {
+                            println!("No secret selected. Navigate to a secret name first.");
+                        } else if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(secret_set(helper, &selected, &value).await).await;
+                        }
+                    }
+
+                    Command::SecretCreate(raw) => {
+                        if raw.is_empty() {
+                            println!("Usage: secret-create <name>:<value>[:<description>]");
+                        } else if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(secret_create(helper, &raw).await).await;
+                        }
+                    }
+
+                    Command::SecretList(filter) => {
+                        if let Some(helper) = rl.helper() {
+                            let f = if filter.is_empty() { None } else { Some(filter.as_str()) };
+                            handle_command_result(secret_list(helper, f).await).await;
                         }
                     }
 

@@ -5,6 +5,10 @@ use crate::commands::refresh::refresh;
 use crate::commands::reload::{reload, reload_by_path};
 use crate::commands::reload_by_paths::reload_by_paths;
 use crate::commands::search::search_cli;
+use crate::commands::secret_create::secret_create;
+use crate::commands::secret_get::secret_get;
+use crate::commands::secret_list::secret_list;
+use crate::commands::secret_set::secret_set;
 use crate::commands::set::set_value;
 use crate::completer::ParameterCompleter;
 use crate::encryption::Encryption;
@@ -85,6 +89,37 @@ pub enum Subcommand {
     ParseDb {
         /// Parameter path whose value is a connection string
         path: String,
+    },
+
+    /// Fetch a secret value from AWS Secrets Manager
+    SecretGet {
+        /// Secret name or ARN
+        name: String,
+    },
+
+    /// Update an existing secret's value in AWS Secrets Manager
+    SecretSet {
+        /// Secret name or ARN
+        name: String,
+        /// New secret value (reads from stdin if omitted and stdin is a pipe)
+        value: Option<String>,
+    },
+
+    /// Create a new secret in AWS Secrets Manager
+    SecretCreate {
+        /// Secret name
+        name: String,
+        /// Secret value
+        value: String,
+        /// Optional description
+        #[structopt(short = "d", long)]
+        description: Option<String>,
+    },
+
+    /// List secrets in AWS Secrets Manager
+    SecretList {
+        /// Optional name filter substring
+        filter: Option<String>,
     },
 }
 
@@ -266,7 +301,6 @@ pub async fn run(
             if use_color {
                 parse_db(&path, &value);
             } else {
-                // Piped: output `key=value` lines
                 let raw = value.trim().trim_matches(|c| c == '"' || c == '\'');
                 for segment in raw.split(';') {
                     let segment = segment.trim();
@@ -280,6 +314,51 @@ pub async fn run(
                     }
                 }
             }
+        }
+
+        // ── secret-get ─────────────────────────────────────────────────────
+        Subcommand::SecretGet { name } => {
+            let mut helper = make_helper(
+                region, base_path, refresh_cache, store_dir, verbose, encryption_key, false,
+            ).await?;
+            let value = secret_get(&mut helper, &name).await?;
+            println!("{}", value);
+        }
+
+        // ── secret-set ─────────────────────────────────────────────────────
+        Subcommand::SecretSet { name, value } => {
+            let v = match value {
+                Some(v) => v,
+                None => {
+                    if io::stdin().is_terminal() {
+                        return Err("No value provided. Pass a value argument or pipe via stdin.".into());
+                    }
+                    read_stdin_value()?
+                }
+            };
+            let mut helper = make_helper(
+                region, base_path, refresh_cache, store_dir, verbose, encryption_key, false,
+            ).await?;
+            let msg = secret_set(&mut helper, &name, &v).await?;
+            eprintln!("{}", msg);
+        }
+
+        // ── secret-create ──────────────────────────────────────────────────
+        Subcommand::SecretCreate { name, value, description } => {
+            let mut helper = make_helper(
+                region, base_path, refresh_cache, store_dir, verbose, encryption_key, false,
+            ).await?;
+            helper.completer.create_secret(&name, &value, description).await?;
+            eprintln!("Secret '{}' created.", name);
+        }
+
+        // ── secret-list ────────────────────────────────────────────────────
+        Subcommand::SecretList { filter } => {
+            let helper = make_helper(
+                region, base_path, refresh_cache, store_dir, verbose, encryption_key, false,
+            ).await?;
+            let output = secret_list(&helper, filter.as_deref()).await?;
+            println!("{}", output);
         }
     }
 

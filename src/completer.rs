@@ -662,4 +662,150 @@ impl ParameterCompleter {
             println!("{}", message);
         }
     }
+
+    // ── Secrets Manager ──────────────────────────────────────────────────────
+
+    fn secrets_cache_file(&self) -> String {
+        let base = self.get_sanitized_base_path();
+        self.get_file_path(&base, "secrets")
+    }
+
+    /// Load secrets from the on-disk cache into `self.secrets`.
+    pub fn load_secrets_from_cache(&mut self) {
+        let path = self.secrets_cache_file();
+        if let Ok(file) = File::open(&path) {
+            for line in BufReader::new(file).lines().flatten() {
+                if let Some(colon) = line.find(": ") {
+                    let name = line[..colon].to_string();
+                    let enc = &line[colon + 2..];
+                    let value = self.encryption.decrypt_value(enc);
+                    self.secrets.insert(name, value);
+                }
+            }
+        }
+    }
+
+    /// Persist a single secret to the cache file.
+    fn cache_secret(&self, name: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.secrets_cache_file();
+        let encrypted = self.encryption.encrypt_value(value);
+        // Replace existing line or append.
+        if std::path::Path::new(&path).exists() {
+            if let Ok(contents) = fs::read_to_string(&path) {
+                if contents.contains(name) {
+                    replace_first_line_containing(
+                        &path,
+                        name,
+                        &format!("{}: {}", name, encrypted),
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
+        let mut file = fs::OpenOptions::new().append(true).create(true).open(&path)?;
+        writeln!(file, "{}: {}", name, encrypted)?;
+        Ok(())
+    }
+
+    /// Fetch a secret value from Secrets Manager, cache it, return plain text.
+    pub async fn get_secret(
+        &mut self,
+        name: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        self.log(&format!("Fetching secret: {}", name));
+        let req = GetSecretValueRequest {
+            secret_id: name.to_string(),
+            version_id: None,
+            version_stage: None,
+        };
+        let resp = self.secrets_client.get_secret_value(req).await?;
+        let value = resp
+            .secret_string
+            .or_else(|| {
+                resp.secret_binary
+                    .map(|b| base64::encode(b))
+            })
+            .unwrap_or_default();
+        self.secrets.insert(name.to_string(), value.clone());
+        self.cache_secret(name, &value)?;
+        Ok(value)
+    }
+
+    /// Update an existing secret's value in Secrets Manager and cache.
+    pub async fn set_secret(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.log(&format!("Updating secret: {}", name));
+        let req = PutSecretValueRequest {
+            secret_id: name.to_string(),
+            secret_string: Some(value.to_string()),
+            ..Default::default()
+        };
+        self.secrets_client.put_secret_value(req).await?;
+        self.secrets.insert(name.to_string(), value.to_string());
+        self.cache_secret(name, value)?;
+        Ok(())
+    }
+
+    /// Create a new secret in Secrets Manager and cache it.
+    pub async fn create_secret(
+        &mut self,
+        name: &str,
+        value: &str,
+        description: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.log(&format!("Creating secret: {}", name));
+        let req = CreateSecretRequest {
+            name: name.to_string(),
+            secret_string: Some(value.to_string()),
+            description,
+            ..Default::default()
+        };
+        self.secrets_client.create_secret(req).await?;
+        self.secrets.insert(name.to_string(), value.to_string());
+        self.cache_secret(name, value)?;
+        Ok(())
+    }
+
+    /// List secrets from Secrets Manager (names + descriptions only; values not fetched).
+    /// Optionally filter by a name substring.
+    pub async fn list_secrets_from_aws(
+        &self,
+        filter: Option<&str>,
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        self.log("Listing secrets from Secrets Manager");
+        let mut results: Vec<(String, String)> = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let req = ListSecretsRequest {
+                next_token: next_token.clone(),
+                max_results: Some(100),
+                ..Default::default()
+            };
+            let resp = self.secrets_client.list_secrets(req).await?;
+
+            if let Some(list) = resp.secret_list {
+                for s in list {
+                    let name = s.name.unwrap_or_default();
+                    let desc = s.description.unwrap_or_default();
+                    if let Some(f) = filter {
+                        if !name.contains(f) {
+                            continue;
+                        }
+                    }
+                    results.push((name, desc));
+                }
+            }
+
+            match resp.next_token {
+                Some(t) => next_token = Some(t),
+                None => break,
+            }
+        }
+
+        Ok(results)
+    }
 }
