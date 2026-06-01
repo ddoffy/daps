@@ -16,7 +16,6 @@ pub mod commands;
 pub mod completer;
 pub mod encryption;
 pub mod helper;
-pub mod mcp;
 pub mod repl;
 pub mod utils;
 
@@ -84,20 +83,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         format!("{}/{}", home_dir, opt.store_dir)
     };
-
-    // ── MCP server shorthand: `daps mcp` subcommand ────────────────────────
-    if matches!(opt.cmd, Some(Subcommand::Mcp)) {
-        let mut completer = ParameterCompleter::new(
-            region,
-            base_path,
-            opt.refresh,
-            store_dir,
-            opt.verbose,
-            Encryption::new(true, encryption_key),
-        );
-        completer.load_parameters().await?;
-        return mcp::run(&mut completer).await;
-    }
 
     // ── Non-interactive CLI subcommands ────────────────────────────────────
     if let Some(sub) = opt.cmd {

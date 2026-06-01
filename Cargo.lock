@@ -333,10 +333,9 @@ dependencies = [
  "rand",
  "regex",
  "rusoto_core",
+ "rusoto_secretsmanager",
  "rusoto_ssm",
  "rustyline",
- "serde",
- "serde_json",
  "sha2 0.10.9",
  "structopt",
  "tokio",
@@ -1250,6 +1249,20 @@ dependencies = [
  "shlex",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "rusoto_secretsmanager"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71bb6e46b93dd9a5bb67ff2939a8e99dec611a532c3643f627f83d123628d85f"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

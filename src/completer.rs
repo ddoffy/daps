@@ -1,6 +1,10 @@
 use crate::encryption::Encryption;
 use crate::utils::replace_first_line_containing;
 use rusoto_core::{Region, RusotoError};
+use rusoto_secretsmanager::{
+    CreateSecretRequest, GetSecretValueRequest, ListSecretsRequest, PutSecretValueRequest,
+    SecretsManager, SecretsManagerClient,
+};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -9,7 +13,9 @@ use std::io::{self, BufRead, BufReader, Write};
 pub struct ParameterCompleter {
     pub parameters: HashMap<String, Vec<String>>,
     pub values: HashMap<String, String>,
+    pub secrets: HashMap<String, String>,
     pub client: SsmClient,
+    pub secrets_client: SecretsManagerClient,
     pub base_path: String,
     pub refresh: bool,
     pub store_dir: String,
@@ -42,6 +48,7 @@ impl ParameterCompleter {
         verbose: bool,
         encryption: Encryption,
     ) -> Self {
+        let secrets_client = SecretsManagerClient::new(region.clone());
         let client = SsmClient::new(region);
 
         std::fs::create_dir_all(&store_dir).unwrap_or_else(|_| {
@@ -51,8 +58,10 @@ impl ParameterCompleter {
         Self {
             parameters: HashMap::new(),
             client,
+            secrets_client,
             base_path,
             values: HashMap::new(),
+            secrets: HashMap::new(),
             refresh,
             store_dir,
             verbose,

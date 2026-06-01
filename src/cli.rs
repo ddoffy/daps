@@ -86,9 +86,6 @@ pub enum Subcommand {
         /// Parameter path whose value is a connection string
         path: String,
     },
-
-    /// Run as an MCP (Model Context Protocol) server over stdio
-    Mcp,
 }
 
 /// Builds a lightweight `ParamStoreHelper` for CLI use.
@@ -284,8 +281,6 @@ pub async fn run(
                 }
             }
         }
-
-        Subcommand::Mcp => unreachable!("Mcp handled in main"),
     }
 
     Ok(())
