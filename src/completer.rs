@@ -304,6 +304,33 @@ impl ParameterCompleter {
                 is_values_loaded = true;
             }
 
+            // Merge all other parameter/value caches from the store directory so
+            // that the completion tree is always complete regardless of which
+            // base path was used when each cache was built.
+            if let Ok(entries) = std::fs::read_dir(&self.store_dir) {
+                let primary_params = format!("parameters_{}.txt", base_path);
+                let primary_values = format!("values_{}.txt", base_path);
+                for entry in entries.flatten() {
+                    let fname = entry.file_name();
+                    let fname = fname.to_string_lossy();
+                    if fname == primary_params || fname == primary_values {
+                        continue; // already loaded
+                    }
+                    if fname.starts_with("parameters_") && fname.ends_with(".txt") {
+                        let stem = fname
+                            .trim_start_matches("parameters_")
+                            .trim_end_matches(".txt");
+                        let _ = self.load_parameters_from_file(stem, &mut paths_map);
+                        self.log(format!("Merged cache: {}", fname).as_str());
+                    } else if fname.starts_with("values_") && fname.ends_with(".txt") {
+                        let stem = fname
+                            .trim_start_matches("values_")
+                            .trim_end_matches(".txt");
+                        let _ = self.load_values_from_file(stem, &mut values_d);
+                    }
+                }
+            }
+
             if is_parameters_loaded && is_values_loaded {
                 self.log("Parameters and values loaded from file");
                 self.log(
@@ -571,37 +598,44 @@ impl ParameterCompleter {
             return vec![format!("insert {}:{}:{}", selected, val, "String")];
         }
 
-        // Only complete paths when input starts with '/'; command completions
-        // are handled separately by the helper's cmd_candidates.
         if !path.starts_with('/') {
             return Vec::new();
         }
 
         let parameters = &self.parameters;
 
-        let lookup_path = if path.is_empty() || !path.contains('/') {
-            "/".to_string()
+        // Determine (lookup_path, prefix) for the completion query.
+        //
+        // Three cases:
+        //  1. path ends with '/'        → list children of the trimmed path (empty prefix)
+        //  2. path exactly matches a node with children → descend into those children
+        //  3. otherwise                 → look up parent, filter by the trailing segment
+        let (lookup_path, prefix): (String, String) = if path.ends_with('/') {
+            let parent = path.trim_end_matches('/');
+            let parent = if parent.is_empty() { "/" } else { parent };
+            (parent.to_string(), String::new())
+        } else if parameters.contains_key(path) {
+            // Exact node match: descend into children (empty prefix = show all children)
+            (path.to_string(), String::new())
         } else {
             let last_slash = path.rfind('/').unwrap_or(0);
             if last_slash == 0 {
-                "/".to_string()
+                ("/".to_string(), path[1..].to_string())
             } else {
-                path[0..last_slash].to_string()
+                (path[..last_slash].to_string(), path[last_slash + 1..].to_string())
             }
-        };
-
-        let prefix = if path.contains('/') {
-            path.split('/').last().unwrap_or("").to_string()
-        } else {
-            path.to_string()
         };
 
         parameters
             .get(&lookup_path)
             .map(|children| {
+                let mut seen = std::collections::HashSet::new();
                 children
                     .iter()
-                    .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
+                    .filter(|child| {
+                        child.to_lowercase().starts_with(&prefix.to_lowercase())
+                            && seen.insert(child.to_lowercase())
+                    })
                     .map(|child| {
                         if lookup_path == "/" {
                             format!("/{}", child)

@@ -4,10 +4,8 @@ use crate::completer::ParameterCompleter;
 use crate::encryption::Encryption;
 use crate::helper::ParamStoreHelper;
 use crate::utils::parse_region;
-use clipboard::ClipboardContext;
-use clipboard::ClipboardProvider;
 use rustyline::{
-    CompletionType, Config, EditMode, Editor,
+    Cmd, CompletionType, Config, EditMode, Editor, EventHandler, KeyCode, KeyEvent, Modifiers,
     highlight::MatchingBracketHighlighter,
 };
 use structopt::StructOpt;
@@ -16,7 +14,6 @@ pub mod cli;
 pub mod command;
 pub mod commands;
 pub mod completer;
-pub mod cpboard;
 pub mod encryption;
 pub mod helper;
 pub mod mcp;
@@ -120,20 +117,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::builder()
         .edit_mode(EditMode::Vi)
-        .completion_type(CompletionType::Circular)
+        .completion_type(CompletionType::List)
         .auto_add_history(true)
         .bell_style(rustyline::config::BellStyle::None)
         .build();
 
     let mut rl: Editor<ParamStoreHelper> = Editor::with_config(config)?;
+    rl.bind_sequence(
+        KeyEvent(KeyCode::Tab, Modifiers::NONE),
+        EventHandler::Simple(Cmd::Complete),
+    );
     rl.set_helper(Some(ParamStoreHelper {
         completer,
         highlighter: MatchingBracketHighlighter::new(),
         commands: Command::keywords(),
     }));
 
-    let mut ctx = ClipboardContext::new()
-        .map_err(|e| format!("Failed to create clipboard context: {}", e))?;
-
-    repl::run(&mut rl, &mut ctx).await
+    repl::run(&mut rl).await
 }

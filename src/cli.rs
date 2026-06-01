@@ -267,13 +267,9 @@ pub async fn run(
             ).await?;
             let value = reload(&mut helper, &path).await?;
             if use_color {
-                use clipboard::{ClipboardContext, ClipboardProvider};
-                let mut ctx = ClipboardContext::new()
-                    .map_err(|e| format!("Failed to create clipboard context: {}", e))?;
-                let mut cpboard = crate::cpboard::Cpboard::new(&mut ctx);
-                parse_db(&path, &value, &mut cpboard);
+                parse_db(&path, &value);
             } else {
-                // Piped: output `key=value` lines, no clipboard
+                // Piped: output `key=value` lines
                 let raw = value.trim().trim_matches(|c| c == '"' || c == '\'');
                 for segment in raw.split(';') {
                     let segment = segment.trim();
