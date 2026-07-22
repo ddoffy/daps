@@ -137,6 +137,23 @@ daps secret-create /myapp/prod/api_key:mysecretvalue
 daps secret-create /myapp/prod/api_key:mysecretvalue:"Production API key"
 ```
 
+### Shell completions
+
+Generate a completion script for `bash`, `zsh`, or `fish` and write it where your
+shell looks for completions:
+
+```sh
+# bash
+daps completion bash > /etc/bash_completion.d/daps
+#   or, per-user:  daps completion bash > ~/.local/share/bash-completion/completions/daps
+
+# zsh — put it on your $fpath, then run compinit
+daps completion zsh > ~/.zfunc/_daps
+
+# fish
+daps completion fish > ~/.config/fish/completions/daps.fish
+```
+
 ---
 
 ## Scripting patterns

@@ -271,6 +271,7 @@ impl ParameterCompleter {
     fn add_commands(&self, paths_map: &mut HashMap<String, Vec<String>>) {
         paths_map.insert("set".to_string(), Vec::new());
         paths_map.insert("select".to_string(), Vec::new());
+        paths_map.insert("selected".to_string(), Vec::new());
         paths_map.insert("insert".to_string(), Vec::new());
         paths_map.insert("search".to_string(), Vec::new());
         paths_map.insert("refresh".to_string(), Vec::new());
@@ -278,6 +279,7 @@ impl ParameterCompleter {
         paths_map.insert("reloads".to_string(), Vec::new());
         paths_map.insert("reload-by-path".to_string(), Vec::new());
         paths_map.insert("reload-by-paths".to_string(), Vec::new());
+        paths_map.insert("reload-paths".to_string(), Vec::new());
         paths_map.insert("exit".to_string(), Vec::new());
         paths_map.insert("secret-get".to_string(), Vec::new());
         paths_map.insert("secret-set".to_string(), Vec::new());

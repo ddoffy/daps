@@ -11,7 +11,7 @@ pub enum Command {
     ShowSelected,
     /// Re-fetches all parameters under the selected path prefix (`reloads`).
     ReloadSelected,
-    /// `reload-by-paths <paths>` — re-fetches all under an explicit prefix.
+    /// `reload-by-paths <paths>` / `reload-paths <paths>` — re-fetches all under explicit prefixes.
     ReloadByPaths(String),
     /// `reload-by-path <path>` — re-fetches one explicit parameter.
     ReloadByPath(String),
@@ -54,11 +54,11 @@ impl Command {
             "migration" => Command::Migration,
             "reload" => Command::Reload,
             "reloads" => Command::ReloadSelected,
-            "reload-by-paths" => Command::ReloadByPaths(rest.to_string()),
+            "reload-by-paths" | "reload-paths" => Command::ReloadByPaths(rest.to_string()),
             "reload-by-path" => Command::ReloadByPath(rest.to_string()),
             "set" => Command::Set(rest.to_string()),
-            // "select" (no arg) → show current selection; "sel <n>" → pick by index
-            "select" => Command::ShowSelected,
+            // "select"/"selected" (no arg) → show current selection; "sel <n>" → pick by index
+            "select" | "selected" => Command::ShowSelected,
             "sel" => Command::SelectByIndex(rest.to_string()),
             "insert" => Command::Insert(rest.to_string()),
             "search" => Command::Search(rest.to_string()),
@@ -80,9 +80,11 @@ impl Command {
             "reloads",
             "set",
             "select",
+            "selected",
             "sel",
             "reload-by-path",
             "reload-by-paths",
+            "reload-paths",
             "insert",
             "search",
             "migration",

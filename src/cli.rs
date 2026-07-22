@@ -5,7 +5,6 @@ use crate::commands::refresh::refresh;
 use crate::commands::reload::{reload, reload_by_path};
 use crate::commands::reload_by_paths::reload_by_paths;
 use crate::commands::search::search_cli;
-use crate::commands::secret_create::secret_create;
 use crate::commands::secret_get::secret_get;
 use crate::commands::secret_list::secret_list;
 use crate::commands::secret_set::secret_set;
@@ -120,6 +119,18 @@ pub enum Subcommand {
     SecretList {
         /// Optional name filter substring
         filter: Option<String>,
+    },
+
+    /// Generate a shell completion script and print it to stdout
+    ///
+    /// Examples:
+    ///   daps completion bash > /etc/bash_completion.d/daps
+    ///   daps completion zsh  > ~/.zfunc/_daps
+    ///   daps completion fish > ~/.config/fish/completions/daps.fish
+    Completion {
+        /// Target shell
+        #[structopt(possible_values = &["bash", "zsh", "fish"])]
+        shell: structopt::clap::Shell,
     },
 }
 
@@ -360,6 +371,10 @@ pub async fn run(
             let output = secret_list(&helper, filter.as_deref()).await?;
             println!("{}", output);
         }
+
+        // ── completion ─────────────────────────────────────────────────────
+        // Handled in main before AWS setup; never reaches here.
+        Subcommand::Completion { .. } => unreachable!("completion is handled in main"),
     }
 
     Ok(())

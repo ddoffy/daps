@@ -54,6 +54,12 @@ struct Opt {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opt = Opt::from_args();
 
+    // ── Shell completion generation (no AWS access needed) ─────────────────
+    if let Some(Subcommand::Completion { shell }) = &opt.cmd {
+        Opt::clap().gen_completions_to("daps", *shell, &mut std::io::stdout());
+        return Ok(());
+    }
+
     let encryption_key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| {
         if opt.verbose {
             eprintln!("DAPS_ENCRYPTION_KEY not set, using default");
