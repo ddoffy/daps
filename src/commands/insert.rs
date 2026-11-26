@@ -7,7 +7,7 @@ pub async fn insert_value(
     helper: &mut ParamStoreHelper,
     raw: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    println!("Inserting parameter: {}", raw);
+    helper.completer.log(&format!("Inserting parameter: {}", raw));
     let path_and_value = raw.to_string();
 
     // Format: /path/to/parameter:value:Type
@@ -32,6 +32,6 @@ pub async fn insert_value(
         .update_all(path, value.to_string())
         .await?;
 
-    println!("Inserted value: {}", value);
+    helper.completer.log(&format!("Inserted value: {}", value));
     Ok(value.to_string())
 }

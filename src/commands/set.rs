@@ -8,8 +8,8 @@ pub async fn set_value(
     value: &str,
     path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    println!("Setting parameter: {}", path);
+    helper.completer.log(&format!("Setting parameter: {}", path));
     let value = helper.completer.change_value(path, value.to_string()).await?;
-    println!("Set value: {}", value);
+    helper.completer.log(&format!("Set value: {}", value));
     Ok(value)
 }
