@@ -132,6 +132,16 @@ pub enum Subcommand {
         #[structopt(possible_values = &["bash", "zsh", "fish"])]
         shell: structopt::clap::Shell,
     },
+
+    /// Print a self-contained usage guide (for AI agents and humans); needs no AWS access
+    Guide {
+        /// Print one line instead of the guide if its hash equals HASH
+        #[structopt(long, value_name = "HASH", conflicts_with = "if-new")]
+        if_changed: Option<String>,
+        /// Print a one-line note instead of the guide if you already read this version
+        #[structopt(long)]
+        if_new: bool,
+    },
 }
 
 /// Builds a lightweight `ParamStoreHelper` for CLI use.
@@ -375,6 +385,7 @@ pub async fn run(
         // ── completion ─────────────────────────────────────────────────────
         // Handled in main before AWS setup; never reaches here.
         Subcommand::Completion { .. } => unreachable!("completion is handled in main"),
+        Subcommand::Guide { .. } => unreachable!("guide is handled in main"),
     }
 
     Ok(())

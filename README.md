@@ -79,6 +79,15 @@ Type a partial path and press `Tab` to expand.
 
 ---
 
+## For AI agents: `daps guide`
+
+`daps guide` prints a compact, self-contained reference (no AWS access needed). Agents should
+use the one-shot subcommands, not the REPL. To avoid re-reading it, run
+`daps guide --if-changed <hash>` with the hash from the first line; `daps guide --if-new`
+does the same for humans by remembering the last version you read.
+
+---
+
 ## Mode 2 — CLI subcommands (non-interactive / scriptable)
 
 All subcommands exit after execution — suitable for scripts, CI, shell aliases.

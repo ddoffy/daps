@@ -15,6 +15,7 @@ pub mod command;
 pub mod commands;
 pub mod completer;
 pub mod encryption;
+pub mod guide;
 pub mod helper;
 pub mod repl;
 pub mod utils;
@@ -57,6 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Shell completion generation (no AWS access needed) ─────────────────
     if let Some(Subcommand::Completion { shell }) = &opt.cmd {
         Opt::clap().gen_completions_to("daps", *shell, &mut std::io::stdout());
+        return Ok(());
+    }
+
+    // ── Usage guide (no AWS access needed) ─────────────────────────────────
+    if let Some(Subcommand::Guide { if_changed, if_new }) = &opt.cmd {
+        guide::run(if_changed.clone(), *if_new);
         return Ok(());
     }
 
