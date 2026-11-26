@@ -60,6 +60,12 @@ SAFETY AND COST
     parameter and can be slow and costly.
   - Errors go to stderr with a non-zero exit code.
 
+SHELL COMPLETION
+  daps completion zsh > ~/.zsh/_daps   completes paths and secret names from
+  the local cache, and current cached values for set/secret-set (the
+  decrypted value shows on screen and in history if submitted).
+  DAPS_COMPLETE_VALUES=0 turns value completion off.
+
 RE-CHECKING THIS GUIDE
   daps guide --if-changed HASH   one line if the guide is unchanged
   daps guide --if-new            for humans: remembers what you last read

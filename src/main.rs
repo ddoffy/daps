@@ -13,6 +13,7 @@ use structopt::StructOpt;
 pub mod cli;
 pub mod command;
 pub mod commands;
+pub mod complete;
 pub mod completer;
 pub mod encryption;
 pub mod guide;
@@ -51,13 +52,50 @@ struct Opt {
     cmd: Option<Subcommand>,
 }
 
+/// Resolve `--store-dir`: absolute as given, otherwise relative to the home dir.
+fn resolve_store_dir(store_dir: &str) -> String {
+    #[cfg(not(target_os = "windows"))]
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    #[cfg(target_os = "windows")]
+    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+
+    let is_absolute = if cfg!(target_os = "windows") {
+        store_dir.chars().nth(1) == Some(':')
+    } else {
+        store_dir.starts_with('/')
+    };
+
+    if is_absolute {
+        store_dir.to_string()
+    } else {
+        format!("{}/{}", home_dir, store_dir)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ── Completion helper: `daps __complete KIND WORD [STORE_DIR]` ─────────
+    // Raw args so it stays out of --help and the generated scripts. Cache
+    // files only: no AWS, and errors stay silent.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("__complete") {
+        let arg = |i: usize, d: &str| args.get(i).map_or(d.to_string(), |s| s.clone());
+        let key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| "default_key".to_string());
+        complete::run(&arg(2, ""), &arg(3, ""), &resolve_store_dir(&arg(4, "parameters")), &key);
+        return Ok(());
+    }
+
     let opt = Opt::from_args();
 
     // ── Shell completion generation (no AWS access needed) ─────────────────
     if let Some(Subcommand::Completion { shell }) = &opt.cmd {
-        Opt::clap().gen_completions_to("daps", *shell, &mut std::io::stdout());
+        if matches!(shell, structopt::clap::Shell::Zsh) {
+            let mut raw = Vec::new();
+            Opt::clap().gen_completions_to("daps", *shell, &mut raw);
+            print!("{}", complete::zsh_script(&String::from_utf8(raw)?));
+        } else {
+            Opt::clap().gen_completions_to("daps", *shell, &mut std::io::stdout());
+        }
         return Ok(());
     }
 
@@ -80,22 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Base path must start with '/'".into());
     }
 
-    #[cfg(not(target_os = "windows"))]
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    #[cfg(target_os = "windows")]
-    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-
-    let is_absolute = if cfg!(target_os = "windows") {
-        opt.store_dir.chars().nth(1) == Some(':')
-    } else {
-        opt.store_dir.starts_with('/')
-    };
-
-    let store_dir = if is_absolute {
-        opt.store_dir.clone()
-    } else {
-        format!("{}/{}", home_dir, opt.store_dir)
-    };
+    let store_dir = resolve_store_dir(&opt.store_dir);
 
     // ── Non-interactive CLI subcommands ────────────────────────────────────
     if let Some(sub) = opt.cmd {
