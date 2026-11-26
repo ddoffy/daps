@@ -1,30 +1,29 @@
+use crate::cli::Subcommand;
 use crate::command::Command;
 use crate::completer::ParameterCompleter;
 use crate::encryption::Encryption;
 use crate::helper::ParamStoreHelper;
 use crate::utils::parse_region;
-use clipboard::ClipboardContext;
-use clipboard::ClipboardProvider;
 use rustyline::{
-    CompletionType, Config, EditMode, Editor,
+    Cmd, CompletionType, Config, EditMode, Editor, EventHandler, KeyCode, KeyEvent, Modifiers,
     highlight::MatchingBracketHighlighter,
 };
 use structopt::StructOpt;
 
+pub mod cli;
 pub mod command;
 pub mod commands;
 pub mod completer;
-pub mod cpboard;
 pub mod encryption;
+pub mod guide;
 pub mod helper;
-pub mod mcp;
 pub mod repl;
 pub mod utils;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "daps",
-    about = "D. AWS Parameter Store CLI with tab completion",
+    about = "D. AWS Parameter Store CLI",
     author = "D. Doffy <cuongnsm@gmail.com>"
 )]
 struct Opt {
@@ -36,7 +35,7 @@ struct Opt {
     #[structopt(short, long, default_value = "/")]
     path: String,
 
-    /// Refresh parameter cache
+    /// Refresh parameter cache on startup
     #[structopt(short, long)]
     refresh: bool,
 
@@ -48,19 +47,32 @@ struct Opt {
     #[structopt(long)]
     verbose: bool,
 
-    /// Run as an MCP (Model Context Protocol) server over stdio
-    #[structopt(long)]
-    mcp: bool,
+    #[structopt(subcommand)]
+    cmd: Option<Subcommand>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let opt = Opt::from_args();
+
+    // ── Shell completion generation (no AWS access needed) ─────────────────
+    if let Some(Subcommand::Completion { shell }) = &opt.cmd {
+        Opt::clap().gen_completions_to("daps", *shell, &mut std::io::stdout());
+        return Ok(());
+    }
+
+    // ── Usage guide (no AWS access needed) ─────────────────────────────────
+    if let Some(Subcommand::Guide { if_changed, if_new }) = &opt.cmd {
+        guide::run(if_changed.clone(), *if_new);
+        return Ok(());
+    }
+
     let encryption_key = std::env::var("DAPS_ENCRYPTION_KEY").unwrap_or_else(|_| {
-        println!("DAPS_ENCRYPTION_KEY not set, using default");
+        if opt.verbose {
+            eprintln!("DAPS_ENCRYPTION_KEY not set, using default");
+        }
         "default_key".to_string()
     });
-
-    let opt = Opt::from_args();
     let region = parse_region(&opt.region).map_err(|e| format!("Invalid region: {}", e))?;
     let base_path = opt.path.clone();
 
@@ -69,16 +81,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     #[cfg(not(target_os = "windows"))]
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| {
-        println!("HOME not set, using current directory");
-        ".".to_string()
-    });
-
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     #[cfg(target_os = "windows")]
-    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| {
-        println!("APPDATA not set, using current directory");
-        ".".to_string()
-    });
+    let home_dir = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
 
     let is_absolute = if cfg!(target_os = "windows") {
         opt.store_dir.chars().nth(1) == Some(':')
@@ -92,6 +97,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{}/{}", home_dir, opt.store_dir)
     };
 
+    // ── Non-interactive CLI subcommands ────────────────────────────────────
+    if let Some(sub) = opt.cmd {
+        return cli::run(sub, region, base_path, opt.refresh, store_dir, opt.verbose, encryption_key).await;
+    }
+
+    // ── Interactive REPL mode (default when no subcommand given) ───────────
     let mut completer = ParameterCompleter::new(
         region,
         base_path,
@@ -102,28 +113,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     completer.load_parameters().await?;
 
-    // ── MCP server mode ────────────────────────────────────────────────────
-    if opt.mcp {
-        return mcp::run(&mut completer).await;
-    }
-
-    // ── Interactive REPL mode ──────────────────────────────────────────────
     let config = Config::builder()
         .edit_mode(EditMode::Vi)
-        .completion_type(CompletionType::Circular)
+        .completion_type(CompletionType::List)
         .auto_add_history(true)
         .bell_style(rustyline::config::BellStyle::None)
         .build();
 
     let mut rl: Editor<ParamStoreHelper> = Editor::with_config(config)?;
+    rl.bind_sequence(
+        KeyEvent(KeyCode::Tab, Modifiers::NONE),
+        EventHandler::Simple(Cmd::Complete),
+    );
     rl.set_helper(Some(ParamStoreHelper {
         completer,
         highlighter: MatchingBracketHighlighter::new(),
         commands: Command::keywords(),
     }));
 
-    let mut ctx = ClipboardContext::new()
-        .map_err(|e| format!("Failed to create clipboard context: {}", e))?;
-
-    repl::run(&mut rl, &mut ctx).await
+    repl::run(&mut rl).await
 }

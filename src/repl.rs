@@ -7,31 +7,45 @@ use crate::commands::reload::{reload, reload_by_path};
 use crate::commands::reload_by_paths::reload_by_paths;
 use crate::commands::parse_db::parse_db;
 use crate::commands::search::search;
+use crate::commands::secret_create::secret_create;
+use crate::commands::secret_get::secret_get;
+use crate::commands::secret_list::secret_list;
+use crate::commands::secret_set::secret_set;
 use crate::commands::select::select_by_index;
 use crate::commands::set::set_value;
-use crate::cpboard::Cpboard;
 use crate::helper::ParamStoreHelper;
-use clipboard::ClipboardContext;
 use colored::Colorize;
 use rustyline::Editor;
 
 /// Runs the interactive REPL loop.
 ///
-/// Accepts the already-configured `Editor` (with helper attached) and a
-/// `ClipboardContext`.  Returns when the user types `exit`, presses CTRL-C /
-/// CTRL-D, or an unrecoverable readline error occurs.
+/// Accepts the already-configured `Editor` (with helper attached).
+/// Returns when the user types `exit`, presses CTRL-C / CTRL-D,
+/// or an unrecoverable readline error occurs.
 pub async fn run(
     rl: &mut Editor<ParamStoreHelper>,
-    ctx: &mut ClipboardContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let base_path = rl
+        .helper()
+        .map(|h| h.completer.base_path.clone())
+        .unwrap_or_default();
+    let param_count = rl
+        .helper()
+        .map(|h| h.completer.values.len())
+        .unwrap_or(0);
+
     println!("AWS Parameter Store CLI");
+    println!(
+        "Base path: {}  |  {} parameters cached",
+        base_path.cyan(),
+        param_count.to_string().yellow()
+    );
     println!(
         "Type a parameter path and use {} for completion",
         "Tab".red()
     );
     println!("Type '{}' to quit", "exit".yellow());
 
-    let mut cpboard = Cpboard::new(ctx);
     let mut selected = String::new();
 
     loop {
@@ -60,7 +74,6 @@ pub async fn run(
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(
                                 reload(helper, &selected).await,
-                                &mut cpboard,
                             )
                             .await;
                         }
@@ -110,7 +123,6 @@ pub async fn run(
                             };
                             handle_command_result(
                                 reload_by_path(helper, &path).await,
-                                &mut cpboard,
                             )
                             .await;
                         }
@@ -120,7 +132,6 @@ pub async fn run(
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(
                                 set_value(helper, &value, &selected).await,
-                                &mut cpboard,
                             )
                             .await;
                         }
@@ -139,7 +150,6 @@ pub async fn run(
                         if let Some(helper) = rl.helper_mut() {
                             handle_command_result(
                                 insert_value(helper, &raw).await,
-                                &mut cpboard,
                             )
                             .await;
                         }
@@ -157,11 +167,46 @@ pub async fn run(
                         if selected.is_empty() {
                             println!("No parameter selected. Use 'sel <index>' or navigate to a key first.");
                         } else if let Some(helper) = rl.helper() {
-                            let value = helper.completer.values.get(&selected).cloned();
+                            let value = helper.completer.values.get(&selected)
+                                .or_else(|| helper.completer.secrets.get(&selected))
+                                .cloned();
                             match value {
-                                Some(conn_str) => parse_db(&selected, &conn_str, &mut cpboard),
+                                Some(conn_str) => parse_db(&selected, &conn_str),
                                 None => println!("No cached value for '{}'. Try 'reload' first.", selected),
                             }
+                        }
+                    }
+
+                    Command::SecretGet(name) => {
+                        if name.is_empty() {
+                            println!("Usage: secret-get <name>");
+                        } else if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(secret_get(helper, &name).await).await;
+                        }
+                    }
+
+                    Command::SecretSet(value) => {
+                        if value.is_empty() {
+                            println!("Usage: secret-set <value>  (select a secret first with 'sel')");
+                        } else if selected.is_empty() {
+                            println!("No secret selected. Navigate to a secret name first.");
+                        } else if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(secret_set(helper, &selected, &value).await).await;
+                        }
+                    }
+
+                    Command::SecretCreate(raw) => {
+                        if raw.is_empty() {
+                            println!("Usage: secret-create <name>:<value>[:<description>]");
+                        } else if let Some(helper) = rl.helper_mut() {
+                            handle_command_result(secret_create(helper, &raw).await).await;
+                        }
+                    }
+
+                    Command::SecretList(filter) => {
+                        if let Some(helper) = rl.helper() {
+                            let f = if filter.is_empty() { None } else { Some(filter.as_str()) };
+                            handle_command_result(secret_list(helper, f).await).await;
                         }
                     }
 
@@ -183,7 +228,6 @@ pub async fn run(
                                 .cloned()
                                 .collect();
 
-                            let mut clipboard_content = String::new();
                             for p in matching_paths {
                                 if let Some(value) = helper.completer.values.get(&p) {
                                     println!(
@@ -191,16 +235,7 @@ pub async fn run(
                                         p.green(),
                                         value.red()
                                     );
-                                    clipboard_content
-                                        .push_str(&format!("{}: {}\n", p, value));
                                 }
-                            }
-                            if let Err(err) =
-                                cpboard.set_clipboard_content(&clipboard_content)
-                            {
-                                println!("Error copying to clipboard: {}", err);
-                            } else {
-                                println!("Copied to clipboard:\n{}", clipboard_content);
                             }
                         }
                     }

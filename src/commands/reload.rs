@@ -5,9 +5,9 @@ pub async fn reload(
     helper: &mut ParamStoreHelper,
     path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    println!("Reloading parameter: {}", path);
+    helper.completer.log(&format!("Reloading parameter: {}", path));
     let value = helper.completer.get_set_value(path).await?;
-    println!("Reloaded value: {}", value);
+    helper.completer.log(&format!("Reloaded value: {}", value));
     Ok(value)
 }
 
@@ -16,8 +16,8 @@ pub async fn reload_by_path(
     helper: &mut ParamStoreHelper,
     path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    println!("Reloading parameter by path: {}", path);
+    helper.completer.log(&format!("Reloading parameter by path: {}", path));
     let value = helper.completer.get_set_value(path).await?;
-    println!("Reloaded value: {}", value);
+    helper.completer.log(&format!("Reloaded value: {}", value));
     Ok(value)
 }

@@ -11,7 +11,7 @@ pub enum Command {
     ShowSelected,
     /// Re-fetches all parameters under the selected path prefix (`reloads`).
     ReloadSelected,
-    /// `reload-by-paths <paths>` — re-fetches all under an explicit prefix.
+    /// `reload-by-paths <paths>` / `reload-paths <paths>` — re-fetches all under explicit prefixes.
     ReloadByPaths(String),
     /// `reload-by-path <path>` — re-fetches one explicit parameter.
     ReloadByPath(String),
@@ -25,6 +25,14 @@ pub enum Command {
     Search(String),
     /// `parse-db` — parses the selected parameter's value as a Postgres connection string.
     ParseDb,
+    /// `secret-get <name>` — fetch a Secrets Manager secret value.
+    SecretGet(String),
+    /// `secret-set <value>` — update the currently selected secret's value.
+    SecretSet(String),
+    /// `secret-create <name>:<value>[:<desc>]` — create a new secret.
+    SecretCreate(String),
+    /// `secret-list [filter]` — list Secrets Manager secrets.
+    SecretList(String),
     /// Anything else is treated as a path to navigate / display.
     Navigate(String),
 }
@@ -46,15 +54,19 @@ impl Command {
             "migration" => Command::Migration,
             "reload" => Command::Reload,
             "reloads" => Command::ReloadSelected,
-            "reload-by-paths" => Command::ReloadByPaths(rest.to_string()),
+            "reload-by-paths" | "reload-paths" => Command::ReloadByPaths(rest.to_string()),
             "reload-by-path" => Command::ReloadByPath(rest.to_string()),
             "set" => Command::Set(rest.to_string()),
-            // "select" (no arg) → show current selection; "sel <n>" → pick by index
-            "select" => Command::ShowSelected,
+            // "select"/"selected" (no arg) → show current selection; "sel <n>" → pick by index
+            "select" | "selected" => Command::ShowSelected,
             "sel" => Command::SelectByIndex(rest.to_string()),
             "insert" => Command::Insert(rest.to_string()),
             "search" => Command::Search(rest.to_string()),
             "parse-db" => Command::ParseDb,
+            "secret-get" => Command::SecretGet(rest.to_string()),
+            "secret-set" => Command::SecretSet(rest.to_string()),
+            "secret-create" => Command::SecretCreate(rest.to_string()),
+            "secret-list" => Command::SecretList(rest.to_string()),
             _ => Command::Navigate(line.to_string()),
         }
     }
@@ -68,13 +80,19 @@ impl Command {
             "reloads",
             "set",
             "select",
+            "selected",
             "sel",
             "reload-by-path",
             "reload-by-paths",
+            "reload-paths",
             "insert",
             "search",
             "migration",
             "parse-db",
+            "secret-get",
+            "secret-set",
+            "secret-create",
+            "secret-list",
         ]
         .into_iter()
         .map(String::from)

@@ -1,6 +1,10 @@
 use crate::encryption::Encryption;
 use crate::utils::replace_first_line_containing;
 use rusoto_core::{Region, RusotoError};
+use rusoto_secretsmanager::{
+    CreateSecretRequest, GetSecretValueRequest, ListSecretsRequest, PutSecretValueRequest,
+    SecretsManager, SecretsManagerClient,
+};
 use rusoto_ssm::{GetParameterRequest, GetParametersByPathRequest, Ssm, SsmClient};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -9,7 +13,9 @@ use std::io::{self, BufRead, BufReader, Write};
 pub struct ParameterCompleter {
     pub parameters: HashMap<String, Vec<String>>,
     pub values: HashMap<String, String>,
+    pub secrets: HashMap<String, String>,
     pub client: SsmClient,
+    pub secrets_client: SecretsManagerClient,
     pub base_path: String,
     pub refresh: bool,
     pub store_dir: String,
@@ -42,6 +48,7 @@ impl ParameterCompleter {
         verbose: bool,
         encryption: Encryption,
     ) -> Self {
+        let secrets_client = SecretsManagerClient::new(region.clone());
         let client = SsmClient::new(region);
 
         std::fs::create_dir_all(&store_dir).unwrap_or_else(|_| {
@@ -51,8 +58,10 @@ impl ParameterCompleter {
         Self {
             parameters: HashMap::new(),
             client,
+            secrets_client,
             base_path,
             values: HashMap::new(),
+            secrets: HashMap::new(),
             refresh,
             store_dir,
             verbose,
@@ -262,6 +271,7 @@ impl ParameterCompleter {
     fn add_commands(&self, paths_map: &mut HashMap<String, Vec<String>>) {
         paths_map.insert("set".to_string(), Vec::new());
         paths_map.insert("select".to_string(), Vec::new());
+        paths_map.insert("selected".to_string(), Vec::new());
         paths_map.insert("insert".to_string(), Vec::new());
         paths_map.insert("search".to_string(), Vec::new());
         paths_map.insert("refresh".to_string(), Vec::new());
@@ -269,7 +279,12 @@ impl ParameterCompleter {
         paths_map.insert("reloads".to_string(), Vec::new());
         paths_map.insert("reload-by-path".to_string(), Vec::new());
         paths_map.insert("reload-by-paths".to_string(), Vec::new());
+        paths_map.insert("reload-paths".to_string(), Vec::new());
         paths_map.insert("exit".to_string(), Vec::new());
+        paths_map.insert("secret-get".to_string(), Vec::new());
+        paths_map.insert("secret-set".to_string(), Vec::new());
+        paths_map.insert("secret-create".to_string(), Vec::new());
+        paths_map.insert("secret-list".to_string(), Vec::new());
     }
 
     pub async fn load_parameters(
@@ -303,6 +318,36 @@ impl ParameterCompleter {
             } else {
                 is_values_loaded = true;
             }
+
+            // Merge all other parameter/value/secret caches from the store directory so
+            // that the completion tree is always complete regardless of which
+            // base path was used when each cache was built.
+            if let Ok(entries) = std::fs::read_dir(&self.store_dir) {
+                let primary_params = format!("parameters_{}.txt", base_path);
+                let primary_values = format!("values_{}.txt", base_path);
+                for entry in entries.flatten() {
+                    let fname = entry.file_name();
+                    let fname = fname.to_string_lossy();
+                    if fname == primary_params || fname == primary_values {
+                        continue; // already loaded
+                    }
+                    if fname.starts_with("parameters_") && fname.ends_with(".txt") {
+                        let stem = fname
+                            .trim_start_matches("parameters_")
+                            .trim_end_matches(".txt");
+                        let _ = self.load_parameters_from_file(stem, &mut paths_map);
+                        self.log(format!("Merged cache: {}", fname).as_str());
+                    } else if fname.starts_with("values_") && fname.ends_with(".txt") {
+                        let stem = fname
+                            .trim_start_matches("values_")
+                            .trim_end_matches(".txt");
+                        let _ = self.load_values_from_file(stem, &mut values_d);
+                    }
+                }
+            }
+
+            // Always load secrets cache so secret names are available for tab completion.
+            self.load_secrets_from_cache();
 
             if is_parameters_loaded && is_values_loaded {
                 self.log("Parameters and values loaded from file");
@@ -379,6 +424,7 @@ impl ParameterCompleter {
         self.write_values_to_file(&base_path, &self.values)?;
 
         self.log(format!("Loaded {} parameter paths", self.parameters.len()).as_str());
+        self.load_secrets_from_cache();
         Ok(())
     }
 
@@ -571,37 +617,73 @@ impl ParameterCompleter {
             return vec![format!("insert {}:{}:{}", selected, val, "String")];
         }
 
-        // Only complete paths when input starts with '/'; command completions
-        // are handled separately by the helper's cmd_candidates.
+        // `secret-get <partial>` / `secret-set <partial>` → complete from cached secret names.
+        let lower = path.to_lowercase();
+        if lower.starts_with("secret-get ") || lower.starts_with("secret-set ") {
+            let cmd_end = path.find(' ').unwrap_or(path.len());
+            let cmd = &path[..cmd_end];
+            let partial = path[cmd_end + 1..].trim().to_lowercase();
+            let mut matches: Vec<String> = self
+                .secrets
+                .keys()
+                .filter(|name| name.to_lowercase().starts_with(&partial))
+                .map(|name| format!("{} {}", cmd, name))
+                .collect();
+            matches.sort();
+            return matches;
+        }
+
+        // `secret-list <partial>` → suggest cached secret names as filter substrings.
+        if lower.starts_with("secret-list ") {
+            let partial = path["secret-list ".len()..].trim().to_lowercase();
+            let mut matches: Vec<String> = self
+                .secrets
+                .keys()
+                .filter(|name| name.to_lowercase().contains(&partial))
+                .map(|name| format!("secret-list {}", name))
+                .collect();
+            matches.sort();
+            return matches;
+        }
+
         if !path.starts_with('/') {
             return Vec::new();
         }
 
         let parameters = &self.parameters;
 
-        let lookup_path = if path.is_empty() || !path.contains('/') {
-            "/".to_string()
+        // Determine (lookup_path, prefix) for the completion query.
+        //
+        // Three cases:
+        //  1. path ends with '/'        → list children of the trimmed path (empty prefix)
+        //  2. path exactly matches a node with children → descend into those children
+        //  3. otherwise                 → look up parent, filter by the trailing segment
+        let (lookup_path, prefix): (String, String) = if path.ends_with('/') {
+            let parent = path.trim_end_matches('/');
+            let parent = if parent.is_empty() { "/" } else { parent };
+            (parent.to_string(), String::new())
+        } else if parameters.contains_key(path) {
+            // Exact node match: descend into children (empty prefix = show all children)
+            (path.to_string(), String::new())
         } else {
             let last_slash = path.rfind('/').unwrap_or(0);
             if last_slash == 0 {
-                "/".to_string()
+                ("/".to_string(), path[1..].to_string())
             } else {
-                path[0..last_slash].to_string()
+                (path[..last_slash].to_string(), path[last_slash + 1..].to_string())
             }
-        };
-
-        let prefix = if path.contains('/') {
-            path.split('/').last().unwrap_or("").to_string()
-        } else {
-            path.to_string()
         };
 
         parameters
             .get(&lookup_path)
             .map(|children| {
+                let mut seen = std::collections::HashSet::new();
                 children
                     .iter()
-                    .filter(|child| child.to_lowercase().starts_with(&prefix.to_lowercase()))
+                    .filter(|child| {
+                        child.to_lowercase().starts_with(&prefix.to_lowercase())
+                            && seen.insert(child.to_lowercase())
+                    })
                     .map(|child| {
                         if lookup_path == "/" {
                             format!("/{}", child)
@@ -618,5 +700,151 @@ impl ParameterCompleter {
         if self.verbose {
             println!("{}", message);
         }
+    }
+
+    // ── Secrets Manager ──────────────────────────────────────────────────────
+
+    fn secrets_cache_file(&self) -> String {
+        let base = self.get_sanitized_base_path();
+        self.get_file_path(&base, "secrets")
+    }
+
+    /// Load secrets from the on-disk cache into `self.secrets`.
+    pub fn load_secrets_from_cache(&mut self) {
+        let path = self.secrets_cache_file();
+        if let Ok(file) = File::open(&path) {
+            for line in BufReader::new(file).lines().flatten() {
+                if let Some(colon) = line.find(": ") {
+                    let name = line[..colon].to_string();
+                    let enc = &line[colon + 2..];
+                    let value = self.encryption.decrypt_value(enc);
+                    self.secrets.insert(name, value);
+                }
+            }
+        }
+    }
+
+    /// Persist a single secret to the cache file.
+    fn cache_secret(&self, name: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = self.secrets_cache_file();
+        let encrypted = self.encryption.encrypt_value(value);
+        // Replace existing line or append.
+        if std::path::Path::new(&path).exists() {
+            if let Ok(contents) = fs::read_to_string(&path) {
+                if contents.contains(name) {
+                    replace_first_line_containing(
+                        &path,
+                        name,
+                        &format!("{}: {}", name, encrypted),
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
+        let mut file = fs::OpenOptions::new().append(true).create(true).open(&path)?;
+        writeln!(file, "{}: {}", name, encrypted)?;
+        Ok(())
+    }
+
+    /// Fetch a secret value from Secrets Manager, cache it, return plain text.
+    pub async fn get_secret(
+        &mut self,
+        name: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        self.log(&format!("Fetching secret: {}", name));
+        let req = GetSecretValueRequest {
+            secret_id: name.to_string(),
+            version_id: None,
+            version_stage: None,
+        };
+        let resp = self.secrets_client.get_secret_value(req).await?;
+        let value = resp
+            .secret_string
+            .or_else(|| {
+                resp.secret_binary
+                    .map(|b| base64::encode(b))
+            })
+            .unwrap_or_default();
+        self.secrets.insert(name.to_string(), value.clone());
+        self.cache_secret(name, &value)?;
+        Ok(value)
+    }
+
+    /// Update an existing secret's value in Secrets Manager and cache.
+    pub async fn set_secret(
+        &mut self,
+        name: &str,
+        value: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.log(&format!("Updating secret: {}", name));
+        let req = PutSecretValueRequest {
+            secret_id: name.to_string(),
+            secret_string: Some(value.to_string()),
+            ..Default::default()
+        };
+        self.secrets_client.put_secret_value(req).await?;
+        self.secrets.insert(name.to_string(), value.to_string());
+        self.cache_secret(name, value)?;
+        Ok(())
+    }
+
+    /// Create a new secret in Secrets Manager and cache it.
+    pub async fn create_secret(
+        &mut self,
+        name: &str,
+        value: &str,
+        description: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.log(&format!("Creating secret: {}", name));
+        let req = CreateSecretRequest {
+            name: name.to_string(),
+            secret_string: Some(value.to_string()),
+            description,
+            ..Default::default()
+        };
+        self.secrets_client.create_secret(req).await?;
+        self.secrets.insert(name.to_string(), value.to_string());
+        self.cache_secret(name, value)?;
+        Ok(())
+    }
+
+    /// List secrets from Secrets Manager (names + descriptions only; values not fetched).
+    /// Optionally filter by a name substring.
+    pub async fn list_secrets_from_aws(
+        &self,
+        filter: Option<&str>,
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        self.log("Listing secrets from Secrets Manager");
+        let mut results: Vec<(String, String)> = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let req = ListSecretsRequest {
+                next_token: next_token.clone(),
+                max_results: Some(100),
+                ..Default::default()
+            };
+            let resp = self.secrets_client.list_secrets(req).await?;
+
+            if let Some(list) = resp.secret_list {
+                for s in list {
+                    let name = s.name.unwrap_or_default();
+                    let desc = s.description.unwrap_or_default();
+                    if let Some(f) = filter {
+                        if !name.contains(f) {
+                            continue;
+                        }
+                    }
+                    results.push((name, desc));
+                }
+            }
+
+            match resp.next_token {
+                Some(t) => next_token = Some(t),
+                None => break,
+            }
+        }
+
+        Ok(results)
     }
 }
