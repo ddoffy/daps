@@ -163,6 +163,10 @@ daps completion zsh > ~/.zfunc/_daps
 daps completion fish > ~/.config/fish/completions/daps.fish
 ```
 
+The zsh script completes SSM paths and secret names from the local cache (no AWS calls).
+It also completes the current cached value for `set` and `secret-set`; the decrypted value
+appears on screen and in shell history if submitted. Set `DAPS_COMPLETE_VALUES=0` to turn that off.
+
 ---
 
 ## Scripting patterns

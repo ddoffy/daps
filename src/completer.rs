@@ -646,54 +646,7 @@ impl ParameterCompleter {
             return matches;
         }
 
-        if !path.starts_with('/') {
-            return Vec::new();
-        }
-
-        let parameters = &self.parameters;
-
-        // Determine (lookup_path, prefix) for the completion query.
-        //
-        // Three cases:
-        //  1. path ends with '/'        → list children of the trimmed path (empty prefix)
-        //  2. path exactly matches a node with children → descend into those children
-        //  3. otherwise                 → look up parent, filter by the trailing segment
-        let (lookup_path, prefix): (String, String) = if path.ends_with('/') {
-            let parent = path.trim_end_matches('/');
-            let parent = if parent.is_empty() { "/" } else { parent };
-            (parent.to_string(), String::new())
-        } else if parameters.contains_key(path) {
-            // Exact node match: descend into children (empty prefix = show all children)
-            (path.to_string(), String::new())
-        } else {
-            let last_slash = path.rfind('/').unwrap_or(0);
-            if last_slash == 0 {
-                ("/".to_string(), path[1..].to_string())
-            } else {
-                (path[..last_slash].to_string(), path[last_slash + 1..].to_string())
-            }
-        };
-
-        parameters
-            .get(&lookup_path)
-            .map(|children| {
-                let mut seen = std::collections::HashSet::new();
-                children
-                    .iter()
-                    .filter(|child| {
-                        child.to_lowercase().starts_with(&prefix.to_lowercase())
-                            && seen.insert(child.to_lowercase())
-                    })
-                    .map(|child| {
-                        if lookup_path == "/" {
-                            format!("/{}", child)
-                        } else {
-                            format!("{}/{}", lookup_path, child)
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        complete_path(&self.parameters, path)
     }
 
     pub fn log(&self, message: &str) {
@@ -846,5 +799,97 @@ impl ParameterCompleter {
         }
 
         Ok(results)
+    }
+}
+
+/// Children of `path` in the parameter tree, as full paths (REPL and `__complete` share this).
+pub fn complete_path(parameters: &HashMap<String, Vec<String>>, path: &str) -> Vec<String> {
+    if !path.starts_with('/') {
+        return Vec::new();
+    }
+
+    // Determine (lookup_path, prefix) for the completion query.
+    //
+    // Three cases:
+    //  1. path ends with '/'        → list children of the trimmed path (empty prefix)
+    //  2. path exactly matches a node with children → descend into those children
+    //  3. otherwise                 → look up parent, filter by the trailing segment
+    let (lookup_path, prefix): (String, String) = if path.ends_with('/') {
+        let parent = path.trim_end_matches('/');
+        let parent = if parent.is_empty() { "/" } else { parent };
+        (parent.to_string(), String::new())
+    } else if parameters.contains_key(path) {
+        // Exact node match: descend into children (empty prefix = show all children)
+        (path.to_string(), String::new())
+    } else {
+        let last_slash = path.rfind('/').unwrap_or(0);
+        if last_slash == 0 {
+            ("/".to_string(), path[1..].to_string())
+        } else {
+            (path[..last_slash].to_string(), path[last_slash + 1..].to_string())
+        }
+    };
+
+    parameters
+        .get(&lookup_path)
+        .map(|children| {
+            let mut seen = std::collections::HashSet::new();
+            children
+                .iter()
+                .filter(|child| {
+                    child.to_lowercase().starts_with(&prefix.to_lowercase())
+                        && seen.insert(child.to_lowercase())
+                })
+                .map(|child| {
+                    if lookup_path == "/" {
+                        format!("/{}", child)
+                    } else {
+                        format!("{}/{}", lookup_path, child)
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree() -> HashMap<String, Vec<String>> {
+        let mut t = HashMap::new();
+        for p in ["/flex/uat/a", "/flex/uat/Ab", "/flex/qa/x", "/other"] {
+            ParameterCompleter::process_parameter_path(p, &mut t);
+        }
+        t
+    }
+
+    #[test]
+    fn trailing_slash_lists_children() {
+        let mut got = complete_path(&tree(), "/flex/");
+        got.sort();
+        assert_eq!(got, ["/flex/qa", "/flex/uat"]);
+        let mut root = complete_path(&tree(), "/");
+        root.sort();
+        assert_eq!(root, ["/flex", "/other"]);
+    }
+
+    #[test]
+    fn exact_node_descends() {
+        let mut got = complete_path(&tree(), "/flex/uat");
+        got.sort();
+        assert_eq!(got, ["/flex/uat/Ab", "/flex/uat/a"]);
+    }
+
+    #[test]
+    fn partial_segment_filters_case_insensitively() {
+        assert_eq!(complete_path(&tree(), "/fl"), ["/flex"]);
+        assert_eq!(complete_path(&tree(), "/flex/uat/A").len(), 2);
+    }
+
+    #[test]
+    fn unknown_or_relative_is_empty() {
+        assert!(complete_path(&tree(), "/nope/x").is_empty());
+        assert!(complete_path(&tree(), "flex").is_empty());
     }
 }
